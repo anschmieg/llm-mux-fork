@@ -252,6 +252,12 @@ routing:
     "gpt-5":
       - "gpt-4o"
       - "gemini-2.5-pro"
+
+  # Canonical /v1/models exposure (feature-flagged)
+  canonical-models-only: false
+  canonical-model-source: aliases
+  canonical-models-include: []   # Optional allowlist, empty = all canonical IDs
+  hide-provider-models: false    # Used with canonical-models-only to hide provider variants
 ```
 
 ### Valid Provider Names

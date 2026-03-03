@@ -95,6 +95,8 @@ const (
 	ctxKeyHandler
 )
 
+const routingFallbackChainMetadataKey = "routing_fallback_chain"
+
 func appendAPIResponse(c *gin.Context, data []byte) {
 	if c == nil || len(data) == 0 {
 		return
@@ -164,12 +166,17 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		return resp.Payload, nil
 	}
 
-	fallbacks := h.getFallbackChain(normalizedModel)
+	fallbacks := h.effectiveFallbackChain(normalizedModel, metadata)
+	attemptedModels := map[string]struct{}{normalizedModel: {}}
 	for _, fallbackModel := range fallbacks {
 		fbProviders, fbNormalizedModel, fbMetadata, _ := h.getRequestDetails(fallbackModel)
 		if len(fbProviders) == 0 {
 			continue
 		}
+		if _, seen := attemptedModels[fbNormalizedModel]; seen {
+			continue
+		}
+		attemptedModels[fbNormalizedModel] = struct{}{}
 		fbReq, fbOpts := buildRequestOpts(fbNormalizedModel, rawJSON, fbMetadata, handlerType, alt, false)
 		fbResp, fbErr := h.AuthManager.Execute(ctx, fbProviders, fbReq, fbOpts)
 		if fbErr == nil {
@@ -209,12 +216,17 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		return h.wrapStreamChannel(ctx, chunks)
 	}
 
-	fallbacks := h.getFallbackChain(normalizedModel)
+	fallbacks := h.effectiveFallbackChain(normalizedModel, metadata)
+	attemptedModels := map[string]struct{}{normalizedModel: {}}
 	for _, fallbackModel := range fallbacks {
 		fbProviders, fbNormalizedModel, fbMetadata, _ := h.getRequestDetails(fallbackModel)
 		if len(fbProviders) == 0 {
 			continue
 		}
+		if _, seen := attemptedModels[fbNormalizedModel]; seen {
+			continue
+		}
+		attemptedModels[fbNormalizedModel] = struct{}{}
 		fbReq, fbOpts := buildRequestOpts(fbNormalizedModel, rawJSON, fbMetadata, handlerType, alt, true)
 		fbChunks, fbErr := h.AuthManager.ExecuteStream(ctx, fbProviders, fbReq, fbOpts)
 		if fbErr == nil {
@@ -288,9 +300,64 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 	}
 
 	if len(providers) == 0 {
+		if specifiedProvider == "" {
+			resolvedProviders, resolvedModel, resolvedMetadata, resolved := h.resolveFallbackSeed(normalizedModel)
+			if resolved {
+				return resolvedProviders, resolvedModel, resolvedMetadata, nil
+			}
+		}
 		return nil, "", nil, &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: fmt.Errorf("unknown provider for model %s", modelName)}
 	}
 	return providers, normalizedModel, metadata, nil
+}
+
+func (h *BaseAPIHandler) resolveFallbackSeed(seedModel string) ([]string, string, map[string]any, bool) {
+	fallbacks := h.getFallbackChain(seedModel)
+	if len(fallbacks) == 0 {
+		return nil, "", nil, false
+	}
+
+	for _, fallbackModel := range fallbacks {
+		normalizedFallback := util.NormalizeIncomingModelID(fallbackModel)
+		if h.Routing != nil {
+			normalizedFallback = h.Routing.ResolveModelAlias(normalizedFallback)
+		}
+
+		providers := util.GetProviderName(normalizedFallback)
+		if len(providers) == 0 {
+			continue
+		}
+
+		metadata := map[string]any{
+			routingFallbackChainMetadataKey: append([]string(nil), fallbacks...),
+		}
+		return providers, normalizedFallback, metadata, true
+	}
+	return nil, "", nil, false
+}
+
+func (h *BaseAPIHandler) effectiveFallbackChain(normalizedModel string, metadata map[string]any) []string {
+	if metadata != nil {
+		if chainRaw, exists := metadata[routingFallbackChainMetadataKey]; exists {
+			switch typed := chainRaw.(type) {
+			case []string:
+				return typed
+			case []any:
+				chain := make([]string, 0, len(typed))
+				for _, entry := range typed {
+					asString, ok := entry.(string)
+					if !ok || asString == "" {
+						continue
+					}
+					chain = append(chain, asString)
+				}
+				if len(chain) > 0 {
+					return chain
+				}
+			}
+		}
+	}
+	return h.getFallbackChain(normalizedModel)
 }
 
 func (h *BaseAPIHandler) parseDynamicModel(modelName string) (providerName, model string, isDynamic bool) {

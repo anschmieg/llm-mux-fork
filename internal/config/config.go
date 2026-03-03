@@ -237,9 +237,27 @@ type RoutingConfig struct {
 	// Example: "claude-opus-4-5" -> ["claude-sonnet-4-5", "gpt-4o"]
 	Fallbacks map[string][]string `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
 
-	hasAliases   bool
-	hasFallbacks bool
-	hasPriority  bool
+	// CanonicalModelsOnly controls /v1/models exposure.
+	// When true, /v1/models is filtered to canonical model IDs derived from aliases.
+	CanonicalModelsOnly bool `yaml:"canonical-models-only,omitempty" json:"canonical-models-only,omitempty"`
+
+	// CanonicalModelSource controls canonical model derivation strategy.
+	// Current supported value: "aliases".
+	CanonicalModelSource string `yaml:"canonical-model-source,omitempty" json:"canonical-model-source,omitempty"`
+
+	// CanonicalModelsInclude optionally limits canonical model IDs exposed by /v1/models.
+	// Empty means include all discovered canonical IDs.
+	CanonicalModelsInclude []string `yaml:"canonical-models-include,omitempty" json:"canonical-models-include,omitempty"`
+
+	// HideProviderModels hides provider-specific model IDs from /v1/models output
+	// when canonical listing mode is enabled.
+	HideProviderModels bool `yaml:"hide-provider-models,omitempty" json:"hide-provider-models,omitempty"`
+
+	hasAliases        bool
+	hasFallbacks      bool
+	hasPriority       bool
+	hasCanonicalAllow bool
+	canonicalAllow    map[string]struct{}
 }
 
 func (r *RoutingConfig) Init() {
@@ -249,6 +267,18 @@ func (r *RoutingConfig) Init() {
 	r.hasAliases = len(r.Aliases) > 0
 	r.hasFallbacks = len(r.Fallbacks) > 0
 	r.hasPriority = len(r.ProviderPriority) > 0
+	if strings.TrimSpace(r.CanonicalModelSource) == "" {
+		r.CanonicalModelSource = "aliases"
+	}
+	r.canonicalAllow = make(map[string]struct{}, len(r.CanonicalModelsInclude))
+	for _, modelID := range r.CanonicalModelsInclude {
+		trimmed := strings.TrimSpace(modelID)
+		if trimmed == "" {
+			continue
+		}
+		r.canonicalAllow[trimmed] = struct{}{}
+	}
+	r.hasCanonicalAllow = len(r.canonicalAllow) > 0
 }
 
 // ResolveModelAlias returns the canonical model name for the given input.
@@ -275,6 +305,31 @@ func (r *RoutingConfig) GetFallbackChain(model string) []string {
 // HasProviderPriority returns true if provider priority is configured.
 func (r *RoutingConfig) HasProviderPriority() bool {
 	return r != nil && r.hasPriority
+}
+
+func (r *RoutingConfig) ShouldUseCanonicalModelListing() bool {
+	if r == nil {
+		return false
+	}
+	return r.CanonicalModelsOnly
+}
+
+func (r *RoutingConfig) ShouldHideProviderModels() bool {
+	if r == nil {
+		return false
+	}
+	return r.HideProviderModels
+}
+
+func (r *RoutingConfig) IsCanonicalModelAllowed(modelID string) bool {
+	if r == nil {
+		return true
+	}
+	if !r.hasCanonicalAllow {
+		return true
+	}
+	_, ok := r.canonicalAllow[modelID]
+	return ok
 }
 
 // NewDefaultConfig creates a new Config with sensible defaults.

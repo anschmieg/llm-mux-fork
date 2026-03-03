@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nghyane/llm-mux/internal/api/handlers/format"
@@ -59,29 +61,193 @@ func (h *OpenAIAPIHandler) Models() []map[string]any {
 // and specifications in OpenAI-compatible format.
 func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 	allModels := h.Models()
+	filteredModels := sanitizeModelsForOpenAI(allModels)
 
-	// Filter to only include the 4 required fields: id, object, created, owned_by
-	filteredModels := make([]map[string]any, len(allModels))
-	for i, model := range allModels {
-		filteredModel := map[string]any{
-			"id":     model["id"],
-			"object": model["object"],
+	if h.Routing != nil {
+		if h.Routing.ShouldUseCanonicalModelListing() {
+			filteredModels = h.canonicalizeModelList(filteredModels)
+		} else if h.Routing.ShouldHideProviderModels() {
+			filteredModels = h.hideProviderVariantModels(filteredModels)
 		}
-
-		// Add created field if it exists
-		if created, exists := model["created"]; exists {
-			filteredModel["created"] = created
-		}
-
-		// Add owned_by
-		filteredModel["owned_by"] = model["owned_by"]
-		filteredModels[i] = filteredModel
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
 		"data":   filteredModels,
 	})
+}
+
+func sanitizeModelsForOpenAI(allModels []map[string]any) []map[string]any {
+	filteredModels := make([]map[string]any, 0, len(allModels))
+	for _, model := range allModels {
+		filteredModel := map[string]any{
+			"id":     model["id"],
+			"object": model["object"],
+		}
+		if created, exists := model["created"]; exists {
+			filteredModel["created"] = created
+		}
+		filteredModel["owned_by"] = model["owned_by"]
+		filteredModels = append(filteredModels, filteredModel)
+	}
+	return filteredModels
+}
+
+func (h *OpenAIAPIHandler) canonicalizeModelList(models []map[string]any) []map[string]any {
+	if h.Routing == nil || len(h.Routing.Aliases) == 0 {
+		return models
+	}
+
+	modelByID := make(map[string]map[string]any, len(models))
+	for _, model := range models {
+		id, _ := model["id"].(string)
+		if id == "" {
+			continue
+		}
+		modelByID[id] = model
+	}
+
+	providerPrefixes := collectProviderPrefixesFromAliases(h.Routing.Aliases)
+	canonicalModels := make([]map[string]any, 0, len(h.Routing.Aliases))
+	added := make(map[string]struct{}, len(h.Routing.Aliases))
+
+	for alias, target := range h.Routing.Aliases {
+		if !isCanonicalAliasCandidate(alias, target, providerPrefixes) {
+			continue
+		}
+		if !h.Routing.IsCanonicalModelAllowed(alias) {
+			continue
+		}
+		backingModel := h.resolveBackingModelForAlias(target, modelByID)
+		if backingModel == nil {
+			continue
+		}
+		if _, exists := added[alias]; exists {
+			continue
+		}
+		canonicalModels = append(canonicalModels, cloneModelWithID(backingModel, alias))
+		added[alias] = struct{}{}
+	}
+
+	sort.Slice(canonicalModels, func(i, j int) bool {
+		idI, _ := canonicalModels[i]["id"].(string)
+		idJ, _ := canonicalModels[j]["id"].(string)
+		return idI < idJ
+	})
+	return canonicalModels
+}
+
+func (h *OpenAIAPIHandler) resolveBackingModelForAlias(target string, modelByID map[string]map[string]any) map[string]any {
+	if target == "" {
+		return nil
+	}
+
+	queue := []string{target}
+	visited := map[string]struct{}{}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == "" {
+			continue
+		}
+		if _, seen := visited[current]; seen {
+			continue
+		}
+		visited[current] = struct{}{}
+
+		if model, ok := modelByID[current]; ok {
+			return model
+		}
+
+		if h.Routing != nil {
+			if next, ok := h.Routing.Aliases[current]; ok && next != current {
+				queue = append(queue, next)
+			}
+			queue = append(queue, h.Routing.GetFallbackChain(current)...)
+		}
+	}
+
+	return nil
+}
+
+func (h *OpenAIAPIHandler) hideProviderVariantModels(models []map[string]any) []map[string]any {
+	if h.Routing == nil || len(h.Routing.Aliases) == 0 {
+		return models
+	}
+	providerPrefixes := collectProviderPrefixesFromAliases(h.Routing.Aliases)
+	filtered := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		id, _ := model["id"].(string)
+		if id == "" {
+			continue
+		}
+		if looksLikeProviderVariantModelID(id, providerPrefixes) {
+			continue
+		}
+		filtered = append(filtered, model)
+	}
+	return filtered
+}
+
+func collectProviderPrefixesFromAliases(aliases map[string]string) map[string]struct{} {
+	prefixes := make(map[string]struct{})
+	for alias := range aliases {
+		if idx := strings.IndexAny(alias, "/:"); idx > 0 {
+			prefixes[alias[:idx]] = struct{}{}
+		}
+		if idx := strings.Index(alias, "-claude-"); idx > 0 {
+			prefixes[alias[:idx]] = struct{}{}
+		}
+	}
+	return prefixes
+}
+
+func isCanonicalAliasCandidate(alias, target string, providerPrefixes map[string]struct{}) bool {
+	if alias == "" || target == "" || alias == target {
+		return false
+	}
+	if strings.Contains(alias, "/") || strings.Contains(alias, ":") {
+		return false
+	}
+	if strings.HasSuffix(alias, "-preview") {
+		return false
+	}
+	for prefix := range providerPrefixes {
+		if strings.HasPrefix(alias, prefix+"-") {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeProviderVariantModelID(modelID string, providerPrefixes map[string]struct{}) bool {
+	for prefix := range providerPrefixes {
+		if strings.HasPrefix(modelID, prefix+"-") ||
+			strings.HasPrefix(modelID, prefix+"/") ||
+			strings.HasPrefix(modelID, prefix+":") {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneModelWithID(model map[string]any, id string) map[string]any {
+	cloned := map[string]any{
+		"id":       id,
+		"object":   "model",
+		"owned_by": "llm-mux",
+	}
+	if object, ok := model["object"]; ok && object != nil {
+		cloned["object"] = object
+	}
+	if created, ok := model["created"]; ok {
+		cloned["created"] = created
+	}
+	if owner, ok := model["owned_by"]; ok && owner != nil {
+		cloned["owned_by"] = owner
+	}
+	return cloned
 }
 
 // ChatCompletions handles the /v1/chat/completions endpoint.
