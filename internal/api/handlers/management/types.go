@@ -8,6 +8,7 @@ type UsageStatsResponse struct {
 	ByProvider map[string]UsageProviderStats `json:"by_provider,omitempty"`
 	ByAccount  map[string]UsageAccountStats  `json:"by_account,omitempty"`
 	ByModel    map[string]UsageModelStats    `json:"by_model,omitempty"`
+	ByPool     map[string]UsagePoolStats     `json:"by_pool,omitempty"`
 	Timeline   *UsageTimeline                `json:"timeline,omitempty"`
 	Period     UsagePeriod                   `json:"period"`
 }
@@ -51,6 +52,15 @@ type UsageAccountStats struct {
 // UsageModelStats represents per-model statistics.
 type UsageModelStats struct {
 	Provider string       `json:"provider"`
+	Requests int64        `json:"requests"`
+	Success  int64        `json:"success"`
+	Failure  int64        `json:"failure"`
+	Tokens   TokenSummary `json:"tokens"`
+}
+
+// UsagePoolStats represents aggregate stats for a configured routing fallback pool.
+type UsagePoolStats struct {
+	Models   []string     `json:"models"`
 	Requests int64        `json:"requests"`
 	Success  int64        `json:"success"`
 	Failure  int64        `json:"failure"`
