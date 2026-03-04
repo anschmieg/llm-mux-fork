@@ -123,6 +123,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 	return []*ModelInfo{
 		// OpenAI models via GitHub Copilot
 		Copilot("gpt-4.1").Display("GPT-4.1").Desc("OpenAI GPT-4.1 via GitHub Copilot").Created(1754524800).B(),
+		Copilot("gpt-4o-mini").Display("GPT-4o Mini").Desc("OpenAI GPT-4o Mini via GitHub Copilot").Created(1715558400).B(),
 		Copilot("gpt-4o").Display("GPT-4o").Desc("OpenAI GPT-4o via GitHub Copilot").Created(1715558400).B(),
 		Copilot("gpt-5").Display("GPT-5").Desc("OpenAI GPT-5 via GitHub Copilot").Created(1762473600).B(),
 		Copilot("gpt-5-mini").Display("GPT-5 Mini").Desc("OpenAI GPT-5 Mini via GitHub Copilot").Created(1762473600).B(),
