@@ -287,6 +287,15 @@ Supported database backends:
 - `sqlite:///path/to/db.sqlite` — Local SQLite (default)
 - `postgres://user:pass@host:5432/db` — PostgreSQL
 
+Management usage response (`GET /v1/management/usage`) includes:
+- `by_provider`
+- `by_account`
+- `by_model`
+- `by_pool` (aggregated from configured `routing.fallbacks` pools)
+
+Note: `by_pool` is an overlapping aggregate view. If a model participates in multiple pools,
+its usage can appear in multiple pool totals.
+
 ---
 
 ## OAuth Model Exclusions
