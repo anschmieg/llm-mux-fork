@@ -253,12 +253,51 @@ routing:
       - "gpt-4o"
       - "gemini-2.5-pro"
 
+  # Task-oriented routing profiles (profile name -> primary model + fallback chain)
+  profiles:
+    chat-fast:
+      primary: "gemini-2.5-flash-lite"
+      fallbacks:
+        - "gpt-4o-mini"
+        - "claude-haiku-4.5"
+    code-fast:
+      primary: "gpt-4o-mini"
+      fallbacks:
+        - "gpt-4.1"
+        - "gemini-2.5-flash"
+
+  # Budget-aware downgrade policy
+  policy:
+    enabled: true
+    downgrade-model: "chat-fast"
+    expensive-model-patterns:
+      - "gpt-5*"
+      - "claude-opus-*"
+    max-expensive-calls-per-day: 200
+    max-estimated-cost-usd-per-day: 10.0
+    model-pricing-usd-per-1k:
+      gpt-4o-mini:
+        input: 0.00015
+        output: 0.0006
+      gpt-4o:
+        input: 0.0025
+        output: 0.01
+
   # Canonical /v1/models exposure (feature-flagged)
   canonical-models-only: false
   canonical-model-source: aliases
   canonical-models-include: []   # Optional allowlist, empty = all canonical IDs
   hide-provider-models: false    # Used with canonical-models-only to hide provider variants
 ```
+
+`routing.profiles` are resolved natively at runtime. Profile names are directly requestable model IDs and are not materialized into `routing.aliases`/`routing.fallbacks`.
+
+Management dashboard usage response (`GET /api/usage`) now includes routing policy counters:
+
+- `routing_policy.estimated_cost_usd_today`
+- `routing_policy.expensive_calls_today`
+- `routing_policy.downgraded_requests_today`
+- limit fields (`max_*`) and `policy_enabled`
 
 ### Valid Provider Names
 

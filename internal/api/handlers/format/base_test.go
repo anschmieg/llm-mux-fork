@@ -71,3 +71,89 @@ func TestGetRequestDetailsReturnsErrorWhenUnresolved(t *testing.T) {
 		t.Fatalf("expected unknown provider error for unresolved fallback seed")
 	}
 }
+
+func TestGetRequestDetailsResolvesRoutingProfile(t *testing.T) {
+	clientID := "test-profile-client"
+	primaryModelID := "gpt-4o"
+	modelRegistry := registry.GetGlobalRegistry()
+	modelRegistry.RegisterClient(clientID, "github-copilot", []*registry.ModelInfo{
+		{
+			ID:          primaryModelID,
+			Object:      "model",
+			OwnedBy:     "github-copilot",
+			CanonicalID: primaryModelID,
+		},
+	})
+	t.Cleanup(func() {
+		modelRegistry.RegisterClient(clientID, "github-copilot", nil)
+	})
+
+	routing := &config.RoutingConfig{
+		Profiles: map[string]config.RoutingProfile{
+			"chat-fast": {
+				Primary:   primaryModelID,
+				Fallbacks: []string{"gpt-4.1"},
+			},
+		},
+	}
+	routing.Init()
+
+	handler := &BaseAPIHandler{Routing: routing}
+	providers, normalizedModel, metadata, errMsg := handler.getRequestDetails("chat-fast")
+	if errMsg != nil {
+		t.Fatalf("expected profile resolution to succeed, got error: %v", errMsg.Error)
+	}
+	if normalizedModel != primaryModelID {
+		t.Fatalf("unexpected normalized model: got=%q want=%q", normalizedModel, primaryModelID)
+	}
+	if !slices.Contains(providers, "github-copilot") {
+		t.Fatalf("expected github-copilot provider in %v", providers)
+	}
+	chain := handler.effectiveFallbackChain(normalizedModel, metadata)
+	if !slices.Equal(chain, []string{"gpt-4.1"}) {
+		t.Fatalf("unexpected profile fallback chain metadata: got=%v", chain)
+	}
+}
+
+func TestGetRequestDetailsResolvesProfileFallbackWhenPrimaryUnavailable(t *testing.T) {
+	clientID := "test-profile-fallback-client"
+	fallbackModelID := "gpt-4.1"
+	modelRegistry := registry.GetGlobalRegistry()
+	modelRegistry.RegisterClient(clientID, "github-copilot", []*registry.ModelInfo{
+		{
+			ID:          fallbackModelID,
+			Object:      "model",
+			OwnedBy:     "github-copilot",
+			CanonicalID: fallbackModelID,
+		},
+	})
+	t.Cleanup(func() {
+		modelRegistry.RegisterClient(clientID, "github-copilot", nil)
+	})
+
+	routing := &config.RoutingConfig{
+		Profiles: map[string]config.RoutingProfile{
+			"tool-use": {
+				Primary:   "missing-primary-model",
+				Fallbacks: []string{fallbackModelID},
+			},
+		},
+	}
+	routing.Init()
+
+	handler := &BaseAPIHandler{Routing: routing}
+	providers, normalizedModel, metadata, errMsg := handler.getRequestDetails("tool-use")
+	if errMsg != nil {
+		t.Fatalf("expected profile fallback to resolve, got error: %v", errMsg.Error)
+	}
+	if normalizedModel != fallbackModelID {
+		t.Fatalf("expected fallback model, got=%q want=%q", normalizedModel, fallbackModelID)
+	}
+	if !slices.Contains(providers, "github-copilot") {
+		t.Fatalf("expected github-copilot provider in %v", providers)
+	}
+	chain := handler.effectiveFallbackChain(normalizedModel, metadata)
+	if !slices.Equal(chain, []string{fallbackModelID}) {
+		t.Fatalf("unexpected resolved chain metadata: got=%v", chain)
+	}
+}

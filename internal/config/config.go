@@ -237,6 +237,14 @@ type RoutingConfig struct {
 	// Example: "claude-opus-4-5" -> ["claude-sonnet-4-5", "gpt-4o"]
 	Fallbacks map[string][]string `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
 
+	// Profiles defines named routing profiles for task-oriented model selection.
+	// Each profile can map to a primary model and a fallback chain.
+	// Example: "chat-fast" -> {primary: "gemini-2.5-flash-lite", fallbacks: ["gpt-4o-mini", "claude-haiku-4.5"]}
+	Profiles map[string]RoutingProfile `yaml:"profiles,omitempty" json:"profiles,omitempty"`
+
+	// Policy defines runtime routing guardrails and budget-aware downgrade behavior.
+	Policy RoutingPolicyConfig `yaml:"policy,omitempty" json:"policy,omitempty"`
+
 	// CanonicalModelsOnly controls /v1/models exposure.
 	// When true, /v1/models is filtered to canonical model IDs derived from aliases.
 	CanonicalModelsOnly bool `yaml:"canonical-models-only,omitempty" json:"canonical-models-only,omitempty"`
@@ -255,15 +263,54 @@ type RoutingConfig struct {
 
 	hasAliases        bool
 	hasFallbacks      bool
+	hasProfiles       bool
 	hasPriority       bool
 	hasCanonicalAllow bool
 	canonicalAllow    map[string]struct{}
+	profileIndex      map[string]RoutingProfile
+}
+
+// RoutingProfile defines a named model routing profile.
+type RoutingProfile struct {
+	Primary   string   `yaml:"primary" json:"primary"`
+	Fallbacks []string `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
+}
+
+// RoutingPolicyConfig defines budget-aware routing guardrails.
+type RoutingPolicyConfig struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
+	// DowngradeModel is the model/profile used when a guardrail is triggered.
+	DowngradeModel string `yaml:"downgrade-model,omitempty" json:"downgrade-model,omitempty"`
+
+	// ExpensiveModelPatterns marks models that should count against expensive-call limits.
+	// Supports wildcard patterns (e.g., "gpt-5*", "claude-opus-*").
+	ExpensiveModelPatterns []string `yaml:"expensive-model-patterns,omitempty" json:"expensive-model-patterns,omitempty"`
+
+	// MaxExpensiveCallsPerDay limits expensive model requests per UTC day.
+	MaxExpensiveCallsPerDay int64 `yaml:"max-expensive-calls-per-day,omitempty" json:"max-expensive-calls-per-day,omitempty"`
+
+	// MaxEstimatedCostUSDPerDay limits estimated spend per UTC day.
+	MaxEstimatedCostUSDPerDay float64 `yaml:"max-estimated-cost-usd-per-day,omitempty" json:"max-estimated-cost-usd-per-day,omitempty"`
+
+	// ModelPricingUSDPer1K maps model patterns to per-1k token prices in USD.
+	// Example:
+	//   "gpt-4o": {input: 0.005, output: 0.015}
+	//   "gpt-5*": {input: 0.01, output: 0.03}
+	ModelPricingUSDPer1K map[string]ModelPriceUSDPer1K `yaml:"model-pricing-usd-per-1k,omitempty" json:"model-pricing-usd-per-1k,omitempty"`
+}
+
+// ModelPriceUSDPer1K defines input/output pricing in USD per 1000 tokens.
+type ModelPriceUSDPer1K struct {
+	Input  float64 `yaml:"input" json:"input"`
+	Output float64 `yaml:"output" json:"output"`
 }
 
 func (r *RoutingConfig) Init() {
 	if r == nil {
 		return
 	}
+	r.normalizeProfiles()
 	r.hasAliases = len(r.Aliases) > 0
 	r.hasFallbacks = len(r.Fallbacks) > 0
 	r.hasPriority = len(r.ProviderPriority) > 0
@@ -279,6 +326,43 @@ func (r *RoutingConfig) Init() {
 		r.canonicalAllow[trimmed] = struct{}{}
 	}
 	r.hasCanonicalAllow = len(r.canonicalAllow) > 0
+}
+
+func (r *RoutingConfig) normalizeProfiles() {
+	if r == nil || len(r.Profiles) == 0 {
+		r.profileIndex = nil
+		r.hasProfiles = false
+		return
+	}
+
+	profileIndex := make(map[string]RoutingProfile, len(r.Profiles))
+	for profileName, profile := range r.Profiles {
+		trimmedProfile := strings.TrimSpace(profileName)
+		if trimmedProfile == "" {
+			continue
+		}
+		primary := strings.TrimSpace(profile.Primary)
+		if primary == "" {
+			continue
+		}
+
+		chain := make([]string, 0, len(profile.Fallbacks))
+		for _, fallback := range profile.Fallbacks {
+			trimmedFallback := strings.TrimSpace(fallback)
+			if trimmedFallback == "" {
+				continue
+			}
+			chain = append(chain, trimmedFallback)
+		}
+
+		profileIndex[trimmedProfile] = RoutingProfile{
+			Primary:   primary,
+			Fallbacks: chain,
+		}
+	}
+
+	r.profileIndex = profileIndex
+	r.hasProfiles = len(profileIndex) > 0
 }
 
 // ResolveModelAlias returns the canonical model name for the given input.
@@ -300,6 +384,28 @@ func (r *RoutingConfig) GetFallbackChain(model string) []string {
 		return nil
 	}
 	return r.Fallbacks[model]
+}
+
+func (r *RoutingConfig) ResolveProfilePrimary(model string) (string, bool) {
+	if r == nil || !r.hasProfiles {
+		return "", false
+	}
+	profile, ok := r.profileIndex[model]
+	if !ok {
+		return "", false
+	}
+	return profile.Primary, true
+}
+
+func (r *RoutingConfig) GetProfileFallbackChain(model string) []string {
+	if r == nil || !r.hasProfiles {
+		return nil
+	}
+	profile, ok := r.profileIndex[model]
+	if !ok || len(profile.Fallbacks) == 0 {
+		return nil
+	}
+	return append([]string(nil), profile.Fallbacks...)
 }
 
 // HasProviderPriority returns true if provider priority is configured.

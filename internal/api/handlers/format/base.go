@@ -12,6 +12,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/interfaces"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
+	"github.com/nghyane/llm-mux/internal/routingpolicy"
 	"github.com/nghyane/llm-mux/internal/util"
 )
 
@@ -96,6 +97,7 @@ const (
 )
 
 const routingFallbackChainMetadataKey = "routing_fallback_chain"
+const routingDowngradeReasonMetadataKey = "routing_downgrade_reason"
 
 func appendAPIResponse(c *gin.Context, data []byte) {
 	if c == nil || len(data) == 0 {
@@ -280,13 +282,43 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 	resolvedModelName := util.ResolveAutoModel(modelName)
 	specifiedProvider := util.ExtractProviderFromPrefixedModelID(resolvedModelName)
 	cleanModelName := util.NormalizeIncomingModelID(resolvedModelName)
+	var profileFallbackChain []string
 
 	if h.Routing != nil {
+		requestedProfileID := cleanModelName
+		if profilePrimary, ok := h.Routing.ResolveProfilePrimary(requestedProfileID); ok {
+			cleanModelName = util.NormalizeIncomingModelID(profilePrimary)
+			profileFallbackChain = h.Routing.GetProfileFallbackChain(requestedProfileID)
+		}
 		cleanModelName = h.Routing.ResolveModelAlias(cleanModelName)
+		if specifiedProvider == "" {
+			if downgradeModel, downgradeReason, downgraded := routingpolicy.Global().ShouldDowngrade(cleanModelName, h.Routing); downgraded {
+				downgradeTarget := util.NormalizeIncomingModelID(downgradeModel)
+				if profilePrimary, ok := h.Routing.ResolveProfilePrimary(downgradeTarget); ok {
+					profileFallbackChain = h.Routing.GetProfileFallbackChain(downgradeTarget)
+					downgradeTarget = util.NormalizeIncomingModelID(profilePrimary)
+				} else {
+					profileFallbackChain = nil
+				}
+				cleanModelName = h.Routing.ResolveModelAlias(downgradeTarget)
+				if metadata == nil {
+					metadata = make(map[string]any, 1)
+				}
+				metadata[routingDowngradeReasonMetadataKey] = downgradeReason
+			}
+		}
+	}
+
+	if len(profileFallbackChain) > 0 {
+		if metadata == nil {
+			metadata = make(map[string]any, 1)
+		}
+		metadata[routingFallbackChainMetadataKey] = append([]string(nil), profileFallbackChain...)
 	}
 
 	providerName, extractedModelName, isDynamic := h.parseDynamicModel(cleanModelName)
-	normalizedModel, metadata = util.NormalizeGeminiThinkingModel(cleanModelName)
+	normalizedModel, geminiMetadata := util.NormalizeGeminiThinkingModel(cleanModelName)
+	metadata = mergeRoutingMetadata(metadata, geminiMetadata)
 
 	if isDynamic {
 		providers = []string{providerName}
@@ -301,9 +333,15 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 
 	if len(providers) == 0 {
 		if specifiedProvider == "" {
+			if len(profileFallbackChain) > 0 {
+				resolvedProviders, resolvedModel, resolvedMetadata, resolved := h.resolveFallbackChain(profileFallbackChain)
+				if resolved {
+					return resolvedProviders, resolvedModel, mergeRoutingMetadata(metadata, resolvedMetadata), nil
+				}
+			}
 			resolvedProviders, resolvedModel, resolvedMetadata, resolved := h.resolveFallbackSeed(normalizedModel)
 			if resolved {
-				return resolvedProviders, resolvedModel, resolvedMetadata, nil
+				return resolvedProviders, resolvedModel, mergeRoutingMetadata(metadata, resolvedMetadata), nil
 			}
 		}
 		return nil, "", nil, &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: fmt.Errorf("unknown provider for model %s", modelName)}
@@ -313,6 +351,13 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 
 func (h *BaseAPIHandler) resolveFallbackSeed(seedModel string) ([]string, string, map[string]any, bool) {
 	fallbacks := h.getFallbackChain(seedModel)
+	if len(fallbacks) == 0 {
+		return nil, "", nil, false
+	}
+	return h.resolveFallbackChain(fallbacks)
+}
+
+func (h *BaseAPIHandler) resolveFallbackChain(fallbacks []string) ([]string, string, map[string]any, bool) {
 	if len(fallbacks) == 0 {
 		return nil, "", nil, false
 	}
@@ -334,6 +379,23 @@ func (h *BaseAPIHandler) resolveFallbackSeed(seedModel string) ([]string, string
 		return providers, normalizedFallback, metadata, true
 	}
 	return nil, "", nil, false
+}
+
+func mergeRoutingMetadata(base, extra map[string]any) map[string]any {
+	if len(base) == 0 && len(extra) == 0 {
+		return nil
+	}
+	if len(base) == 0 {
+		return cloneMetadata(extra)
+	}
+	if len(extra) == 0 {
+		return base
+	}
+	out := cloneMetadata(base)
+	for key, value := range extra {
+		out[key] = value
+	}
+	return out
 }
 
 func (h *BaseAPIHandler) effectiveFallbackChain(normalizedModel string, metadata map[string]any) []string {
