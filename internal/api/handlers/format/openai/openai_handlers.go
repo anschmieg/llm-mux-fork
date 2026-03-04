@@ -94,7 +94,7 @@ func sanitizeModelsForOpenAI(allModels []map[string]any) []map[string]any {
 }
 
 func (h *OpenAIAPIHandler) canonicalizeModelList(models []map[string]any) []map[string]any {
-	if h.Routing == nil || len(h.Routing.Aliases) == 0 {
+	if h.Routing == nil {
 		return models
 	}
 
@@ -108,25 +108,27 @@ func (h *OpenAIAPIHandler) canonicalizeModelList(models []map[string]any) []map[
 	}
 
 	providerPrefixes := collectProviderPrefixesFromAliases(h.Routing.Aliases)
-	canonicalModels := make([]map[string]any, 0, len(h.Routing.Aliases))
-	added := make(map[string]struct{}, len(h.Routing.Aliases))
+	canonicalIDs := h.collectCanonicalModelIDs(models, providerPrefixes)
+	canonicalModels := make([]map[string]any, 0, len(canonicalIDs))
+	added := make(map[string]struct{}, len(canonicalIDs))
 
-	for alias, target := range h.Routing.Aliases {
-		if !isCanonicalAliasCandidate(alias, target, providerPrefixes) {
+	for _, canonicalID := range canonicalIDs {
+		if canonicalID == "" {
 			continue
 		}
-		if !h.Routing.IsCanonicalModelAllowed(alias) {
+		if !h.Routing.IsCanonicalModelAllowed(canonicalID) {
 			continue
 		}
-		backingModel := h.resolveBackingModelForAlias(target, modelByID)
+		if _, exists := added[canonicalID]; exists {
+			continue
+		}
+
+		backingModel := h.resolveBackingModelForAlias(canonicalID, modelByID)
 		if backingModel == nil {
 			continue
 		}
-		if _, exists := added[alias]; exists {
-			continue
-		}
-		canonicalModels = append(canonicalModels, cloneModelWithID(backingModel, alias))
-		added[alias] = struct{}{}
+		canonicalModels = append(canonicalModels, cloneModelWithID(backingModel, canonicalID))
+		added[canonicalID] = struct{}{}
 	}
 
 	sort.Slice(canonicalModels, func(i, j int) bool {
@@ -135,6 +137,59 @@ func (h *OpenAIAPIHandler) canonicalizeModelList(models []map[string]any) []map[
 		return idI < idJ
 	})
 	return canonicalModels
+}
+
+func (h *OpenAIAPIHandler) collectCanonicalModelIDs(models []map[string]any, providerPrefixes map[string]struct{}) []string {
+	if strings.EqualFold(h.Routing.CanonicalModelSource, "fallbacks") {
+		return h.collectCanonicalIDsFromFallbacksAndModels(models, providerPrefixes)
+	}
+	return h.collectCanonicalIDsFromAliases(providerPrefixes)
+}
+
+func (h *OpenAIAPIHandler) collectCanonicalIDsFromAliases(providerPrefixes map[string]struct{}) []string {
+	if len(h.Routing.Aliases) == 0 {
+		return nil
+	}
+	canonicalIDs := make([]string, 0, len(h.Routing.Aliases))
+	for alias, target := range h.Routing.Aliases {
+		if isCanonicalAliasCandidate(alias, target, providerPrefixes) {
+			canonicalIDs = append(canonicalIDs, alias)
+		}
+	}
+	sort.Strings(canonicalIDs)
+	return canonicalIDs
+}
+
+func (h *OpenAIAPIHandler) collectCanonicalIDsFromFallbacksAndModels(models []map[string]any, providerPrefixes map[string]struct{}) []string {
+	candidates := make(map[string]struct{}, len(models))
+
+	for _, model := range models {
+		id, _ := model["id"].(string)
+		if id == "" {
+			continue
+		}
+		if looksLikeProviderVariantModelID(id, providerPrefixes) {
+			continue
+		}
+		candidates[id] = struct{}{}
+	}
+
+	for seed := range h.Routing.Fallbacks {
+		if seed == "" {
+			continue
+		}
+		if looksLikeProviderVariantModelID(seed, providerPrefixes) {
+			continue
+		}
+		candidates[seed] = struct{}{}
+	}
+
+	canonicalIDs := make([]string, 0, len(candidates))
+	for id := range candidates {
+		canonicalIDs = append(canonicalIDs, id)
+	}
+	sort.Strings(canonicalIDs)
+	return canonicalIDs
 }
 
 func (h *OpenAIAPIHandler) resolveBackingModelForAlias(target string, modelByID map[string]map[string]any) map[string]any {
