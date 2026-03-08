@@ -370,14 +370,27 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 }
 
 func (h *BaseAPIHandler) resolveFallbackSeed(seedModel string) ([]string, string, map[string]any, bool) {
+	return h.resolveFallbackSeedWithSeen(seedModel, make(map[string]struct{}))
+}
+
+func (h *BaseAPIHandler) resolveFallbackSeedWithSeen(seedModel string, seen map[string]struct{}) ([]string, string, map[string]any, bool) {
+	if _, exists := seen[seedModel]; exists {
+		return nil, "", nil, false
+	}
+	seen[seedModel] = struct{}{}
+
 	fallbacks := h.getFallbackChain(seedModel)
 	if len(fallbacks) == 0 {
 		return nil, "", nil, false
 	}
-	return h.resolveFallbackChain(fallbacks)
+	return h.resolveFallbackChainWithSeen(fallbacks, seen)
 }
 
 func (h *BaseAPIHandler) resolveFallbackChain(fallbacks []string) ([]string, string, map[string]any, bool) {
+	return h.resolveFallbackChainWithSeen(fallbacks, make(map[string]struct{}))
+}
+
+func (h *BaseAPIHandler) resolveFallbackChainWithSeen(fallbacks []string, seen map[string]struct{}) ([]string, string, map[string]any, bool) {
 	if len(fallbacks) == 0 {
 		return nil, "", nil, false
 	}
@@ -390,6 +403,10 @@ func (h *BaseAPIHandler) resolveFallbackChain(fallbacks []string) ([]string, str
 
 		providers := util.GetProviderName(normalizedFallback)
 		if len(providers) == 0 {
+			resolvedProviders, resolvedModel, resolvedMetadata, resolved := h.resolveFallbackSeedWithSeen(normalizedFallback, seen)
+			if resolved {
+				return resolvedProviders, resolvedModel, resolvedMetadata, true
+			}
 			continue
 		}
 
