@@ -140,6 +140,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 		Copilot("gemini-3-pro-preview").Display("Gemini 3 Pro Preview").Desc("Google Gemini 3 Pro Preview via GitHub Copilot").Created(1763424000).B(),
 		// xAI models via GitHub Copilot
 		Copilot("grok-code-fast-1").Display("Grok Code Fast 1").Desc("xAI Grok Code Fast 1 via GitHub Copilot").Created(1763424000).B(),
+		Copilot("oswe-vscode-prime").Display("OSWE VSCode Prime").Desc("Raptor Mini / OSWE VSCode Prime via GitHub Copilot").Created(1763424000).B(),
 	}
 }
 
