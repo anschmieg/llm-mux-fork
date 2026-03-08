@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	log "github.com/nghyane/llm-mux/internal/logging"
+	"github.com/nghyane/llm-mux/internal/routingpolicy"
 )
 
 func (h *Handler) GetUsageStatistics(c *gin.Context) {
@@ -37,6 +38,17 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 			To:            to,
 			RetentionDays: retentionDays,
 		},
+	}
+	policySnapshot := routingpolicy.Global().Snapshot(h.getRoutingConfig())
+	response.Routing = &UsageRoutingPolicyStats{
+		DayUTC:                    policySnapshot.DayUTC,
+		EstimatedCostUSDToday:     policySnapshot.EstimatedCostUSDToday,
+		MaxEstimatedCostUSDPerDay: policySnapshot.MaxEstimatedCostUSDPerDay,
+		ExpensiveCallsToday:       policySnapshot.ExpensiveCallsToday,
+		MaxExpensiveCallsPerDay:   policySnapshot.MaxExpensiveCallsPerDay,
+		DowngradedRequestsToday:   policySnapshot.DowngradedRequestsToday,
+		DowngradeModel:            policySnapshot.DowngradeModel,
+		PolicyEnabled:             policySnapshot.PolicyEnabled,
 	}
 
 	backend := h.usagePlugin.GetBackend()

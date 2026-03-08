@@ -11,6 +11,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/auth/login"
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/provider"
+	"github.com/nghyane/llm-mux/internal/routingpolicy"
 	"github.com/nghyane/llm-mux/internal/usage"
 )
 
@@ -189,6 +190,10 @@ func (b *Builder) Build() (*Service, error) {
 		plugin := provider.NewQuotaSyncPlugin(qm)
 		usage.RegisterPlugin(plugin)
 	}
+
+	// Register routing policy usage plugin and initialize with current routing config.
+	routingpolicy.RegisterUsagePlugin()
+	routingpolicy.Global().UpdateRouting(&b.cfg.Routing)
 
 	service := &Service{
 		cfg:            b.cfg,
