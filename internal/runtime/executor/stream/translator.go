@@ -33,6 +33,7 @@ func (b *PassthroughEventBuffer) Flush() []*ir.UnifiedEvent {
 type StreamContext struct {
 	ClaudeState          *from_ir.ClaudeStreamState
 	GeminiState          *ir.GeminiStreamParserState
+	ResponsesState       *from_ir.ResponsesStreamState
 	ToolCallIndex        int
 	HasToolCalls         bool
 	FinishSent           bool
@@ -43,8 +44,9 @@ type StreamContext struct {
 
 func NewStreamContext() *StreamContext {
 	return &StreamContext{
-		ClaudeState: from_ir.NewClaudeStreamState(),
-		GeminiState: ir.NewGeminiStreamParserState(),
+		ClaudeState:    from_ir.NewClaudeStreamState(),
+		GeminiState:    ir.NewGeminiStreamParserState(),
+		ResponsesState: from_ir.NewResponsesStreamState(),
 	}
 }
 
@@ -136,10 +138,10 @@ func (t *StreamTranslator) Translate(events []*ir.UnifiedEvent) (*StreamTranslat
 				CacheReadInputTokens: cacheTokens,
 			},
 		}
-		if chunk, err := t.convertEvent(&metaEvent); err != nil {
+		if chunks, err := t.convertEventChunks(&metaEvent); err != nil {
 			return nil, err
-		} else if chunk != nil {
-			allChunks = append(allChunks, chunk)
+		} else if len(chunks) > 0 {
+			allChunks = append(allChunks, chunks...)
 		}
 	}
 
@@ -167,9 +169,18 @@ func (t *StreamTranslator) Translate(events []*ir.UnifiedEvent) (*StreamTranslat
 }
 
 func (t *StreamTranslator) convertAndBuffer(event *ir.UnifiedEvent) ([][]byte, error) {
-	chunk, err := t.convertEvent(event)
+	chunks, err := t.convertEventChunks(event)
 	if err != nil {
 		return nil, err
+	}
+
+	if isResponsesTarget(t.to) {
+		return chunks, nil
+	}
+
+	var chunk []byte
+	if len(chunks) > 0 {
+		chunk = chunks[0]
 	}
 
 	if chunk != nil || event.Type == ir.EventTypeFinish {
@@ -257,8 +268,12 @@ func (t *StreamTranslator) preprocess(event *ir.UnifiedEvent) bool {
 	return false // don't skip
 }
 
-// convertEvent converts single event to target format
-func (t *StreamTranslator) convertEvent(event *ir.UnifiedEvent) ([]byte, error) {
+func isResponsesTarget(target string) bool {
+	return target == "codex" || target == "openai-response"
+}
+
+// convertEventChunks converts a single event to one or more target chunks.
+func (t *StreamTranslator) convertEventChunks(event *ir.UnifiedEvent) ([][]byte, error) {
 	switch {
 	case t.to == "openai" || t.to == "cline":
 		idx := 0
@@ -271,13 +286,34 @@ func (t *StreamTranslator) convertEvent(event *ir.UnifiedEvent) ([]byte, error) 
 				idx = t.Ctx.ToolCallIndex - 1
 			}
 		}
-		return from_ir.ToOpenAIChunk(*event, t.model, t.messageID, idx)
+		chunk, err := from_ir.ToOpenAIChunk(*event, t.model, t.messageID, idx)
+		if chunk == nil || err != nil {
+			return nil, err
+		}
+		return [][]byte{chunk}, nil
+	case isResponsesTarget(t.to):
+		if t.Ctx.ResponsesState == nil {
+			t.Ctx.ResponsesState = from_ir.NewResponsesStreamState()
+		}
+		return from_ir.ToResponsesAPIChunk(*event, t.model, t.Ctx.ResponsesState)
 	case t.to == "claude":
-		return from_ir.ToClaudeSSE(*event, t.Ctx.ClaudeState)
+		chunk, err := from_ir.ToClaudeSSE(*event, t.Ctx.ClaudeState)
+		if chunk == nil || err != nil {
+			return nil, err
+		}
+		return [][]byte{chunk}, nil
 	case provider.IsGeminiFormat(t.to):
-		return from_ir.ToGeminiChunk(*event, t.model)
+		chunk, err := from_ir.ToGeminiChunk(*event, t.model)
+		if chunk == nil || err != nil {
+			return nil, err
+		}
+		return [][]byte{chunk}, nil
 	case t.to == "ollama":
-		return from_ir.ToOllamaChatChunk(*event, t.model)
+		chunk, err := from_ir.ToOllamaChatChunk(*event, t.model)
+		if chunk == nil || err != nil {
+			return nil, err
+		}
+		return [][]byte{chunk}, nil
 	default:
 		return nil, nil // unsupported format
 	}
