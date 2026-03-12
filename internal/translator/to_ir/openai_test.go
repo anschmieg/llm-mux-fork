@@ -453,6 +453,41 @@ func TestParseOpenAIResponse_WithRefusal(t *testing.T) {
 	}
 }
 
+func TestParseOpenAIResponse_UnwrapsResponsesAPIWrapper(t *testing.T) {
+	input := `{
+		"type": "response.completed",
+		"response": {
+			"id": "resp_123",
+			"output": [{
+				"type": "message",
+				"content": [{
+					"type": "output_text",
+					"text": "Wrapped response text"
+				}]
+			}],
+			"usage": {
+				"input_tokens": 10,
+				"output_tokens": 5,
+				"total_tokens": 15
+			}
+		}
+	}`
+
+	messages, usage, err := ParseOpenAIResponse([]byte(input))
+	if err != nil {
+		t.Fatalf("ParseOpenAIResponse failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(messages))
+	}
+	if got := messages[0].Content[0].Text; got != "Wrapped response text" {
+		t.Fatalf("Expected wrapped response text, got %q", got)
+	}
+	if usage == nil || usage.TotalTokens != 15 {
+		t.Fatalf("Expected usage to be parsed from wrapped response, got %#v", usage)
+	}
+}
+
 // ==================== ParseOpenAIChunk Tests ====================
 
 func TestParseOpenAIChunk_TextDelta(t *testing.T) {

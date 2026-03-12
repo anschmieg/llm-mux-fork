@@ -111,6 +111,16 @@ func parseGeminiResponse(response []byte) (*ParsedResponse, error) {
 	return &ParsedResponse{Candidates: candidates, Usage: usage, Meta: meta}, nil
 }
 
+// parseKiroResponse parses Kiro format to IR.
+func parseKiroResponse(response []byte) (*ParsedResponse, error) {
+	messages, usage, err := to_ir.ParseKiroResponse(response)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []ir.CandidateResult{{Index: 0, Messages: messages, FinishReason: ir.FinishReasonStop}}
+	return &ParsedResponse{Candidates: candidates, Usage: usage}, nil
+}
+
 // parseSourceResponse parses response based on source format.
 func parseSourceResponse(from string, response []byte) (*ParsedResponse, error) {
 	switch {
@@ -120,6 +130,8 @@ func parseSourceResponse(from string, response []byte) (*ParsedResponse, error) 
 		return parseClaudeResponse(response)
 	case provider.IsGeminiFormat(from):
 		return parseGeminiResponse(response)
+	case from == "kiro":
+		return parseKiroResponse(response)
 	default:
 		return nil, nil
 	}
