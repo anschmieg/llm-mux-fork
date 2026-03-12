@@ -263,6 +263,9 @@ func ParseOpenAIResponse(rawJSON []byte) ([]ir.Message, *ir.Usage, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if responseRoot := root.Get("response"); responseRoot.IsObject() {
+		root = responseRoot
+	}
 	usage := ir.ParseOpenAIUsage(root.Get("usage"))
 	if v := root.Get("output"); v.IsArray() {
 		return parseResponsesAPIOutput(v, usage)
