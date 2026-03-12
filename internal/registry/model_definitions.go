@@ -147,19 +147,14 @@ func GetGitHubCopilotModels() []*ModelInfo {
 // GetKiroModels returns the standard Kiro (Amazon Q / CodeWhisperer) model definitions
 func GetKiroModels() []*ModelInfo {
 	return []*ModelInfo{
-		// Primary models from Kiro MODEL_MAPPING
-		Kiro("claude-sonnet-4-5").Display("Claude Sonnet 4.5").Desc("Claude Sonnet 4.5 via Kiro/Amazon Q").Created(1758672000).B(),
-		Kiro("claude-sonnet-4-5-20250929").Display("Claude Sonnet 4.5 (20250929)").Desc("Claude Sonnet 4.5 via Kiro/Amazon Q").Created(1758672000).Canonical("claude-sonnet-4-5").B(),
-		Kiro("claude-sonnet-4-20250514").Display("Claude Sonnet 4 (20250514)").Desc("Claude Sonnet 4 via Kiro/Amazon Q").Created(1747267200).Canonical("claude-sonnet-4").B(),
-		Kiro("claude-3-7-sonnet-20250219").Display("Claude 3.7 Sonnet").Desc("Claude 3.7 Sonnet via Kiro/Amazon Q").Created(1739923200).B(),
-		// Amazon Q prefixed aliases
-		Kiro("amazonq-claude-sonnet-4-20250514").Display("Amazon Q Claude Sonnet 4").Desc("Claude Sonnet 4 via Amazon Q").Created(1747267200).Canonical("claude-sonnet-4").B(),
-		Kiro("amazonq-claude-3-7-sonnet-20250219").Display("Amazon Q Claude 3.7 Sonnet").Desc("Claude 3.7 Sonnet via Amazon Q").Created(1739923200).B(),
-		// Additional Claude models available via Kiro
-		Kiro("claude-4-sonnet").Display("Claude 4 Sonnet").Desc("Claude 4 Sonnet via Kiro/Amazon Q").Created(1747267200).Canonical("claude-sonnet-4").B(),
-		Kiro("claude-opus-4-20250514").Display("Claude 4 Opus").Desc("Claude 4 Opus via Kiro/Amazon Q").Created(1747267200).Canonical("claude-opus-4").B(),
-		Kiro("claude-opus-4-5-20251101").Display("Claude 4.5 Opus").Desc("Claude 4.5 Opus via Kiro/Amazon Q").Created(1761955200).Canonical("claude-opus-4-5").B(),
-		Kiro("claude-3-5-sonnet-20241022").Display("Claude 3.5 Sonnet").Desc("Claude 3.5 Sonnet via Kiro/Amazon Q").Created(1729555200).B(),
-		Kiro("claude-3-5-haiku-20241022").Display("Claude 3.5 Haiku").Desc("Claude 3.5 Haiku via Kiro/Amazon Q").Created(1729555200).B(),
+		Kiro("claude-opus-4.6").Display("Claude Opus 4.6").Desc("Claude Opus 4.6 via Kiro/Amazon Q").Created(1772841600).Canonical("claude-opus-4-6").B(),
+		Kiro("claude-opus-4.5").Display("Claude Opus 4.5").Desc("Claude Opus 4.5 via Kiro/Amazon Q").Created(1761955200).Canonical("claude-opus-4-5").B(),
+		Kiro("claude-sonnet-4.6").Display("Claude Sonnet 4.6").Desc("Claude Sonnet 4.6 via Kiro/Amazon Q").Created(1772841600).Canonical("claude-sonnet-4-6").B(),
+		Kiro("claude-sonnet-4.5").Display("Claude Sonnet 4.5").Desc("Claude Sonnet 4.5 via Kiro/Amazon Q").Created(1758672000).Canonical("claude-sonnet-4-5").B(),
+		Kiro("claude-sonnet-4").Display("Claude Sonnet 4").Desc("Claude Sonnet 4 via Kiro/Amazon Q").Created(1715644800).Canonical("claude-sonnet-4").B(),
+		Kiro("claude-haiku-4.5").Display("Claude Haiku 4.5").Desc("Claude Haiku 4.5 via Kiro/Amazon Q").Created(1758672000).Canonical("claude-haiku-4-5").B(),
+		Kiro("deepseek-3.2").Display("DeepSeek 3.2").Desc("DeepSeek 3.2 via Kiro/Amazon Q").Created(1772841600).B(),
+		Kiro("minimax-m2.1").Display("MiniMax M2.1").Desc("MiniMax M2.1 via Kiro/Amazon Q").Created(1772841600).B(),
+		Kiro("qwen3-coder-next").Display("Qwen3 Coder Next").Desc("Qwen3 Coder Next via Kiro/Amazon Q").Created(1772841600).B(),
 	}
 }

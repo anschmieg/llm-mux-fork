@@ -18,6 +18,7 @@ type KiroCredentials struct {
 	Provider     string    `json:"provider,omitempty"`      // Auth provider (e.g., "Google")
 	ClientID     string    `json:"client_id,omitempty"`     // For IAM/SSO auth
 	ClientSecret string    `json:"client_secret,omitempty"` // For IAM/SSO auth
+	IDCRegion    string    `json:"idc_region,omitempty"`    // OIDC region for Builder ID auth
 }
 
 // TokenResponse represents the response from the OIDC token endpoint.

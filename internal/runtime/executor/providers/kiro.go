@@ -9,6 +9,8 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/nghyane/llm-mux/internal/json"
@@ -19,6 +21,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/constant"
 	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/provider"
+	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/runtime/executor"
 	"github.com/nghyane/llm-mux/internal/runtime/executor/stream"
 	"github.com/nghyane/llm-mux/internal/translator"
@@ -30,18 +33,30 @@ import (
 const kiroAPIURL = executor.KiroDefaultBaseURL
 
 var kiroModelMapping = map[string]string{
-	"claude-sonnet-4-5":                  "CLAUDE_SONNET_4_5_20250929_V1_0",
-	"claude-sonnet-4-5-20250929":         "CLAUDE_SONNET_4_5_20250929_V1_0",
-	"claude-sonnet-4-20250514":           "CLAUDE_SONNET_4_20250514_V1_0",
-	"claude-3-7-sonnet-20250219":         "CLAUDE_3_7_SONNET_20250219_V1_0",
-	"amazonq-claude-sonnet-4-20250514":   "CLAUDE_SONNET_4_20250514_V1_0",
-	"amazonq-claude-3-7-sonnet-20250219": "CLAUDE_3_7_SONNET_20250219_V1_0",
-	"claude-4-sonnet":                    "CLAUDE_SONNET_4_20250514_V1_0",
-	"claude-opus-4-20250514":             "CLAUDE_OPUS_4_20250514_V1_0",
-	"claude-opus-4-5-20251101":           "CLAUDE_OPUS_4_5_20251101_V1_0",
-	"claude-3-5-sonnet-20241022":         "CLAUDE_3_5_SONNET_20241022_V1_0",
-	"claude-3-5-haiku-20241022":          "CLAUDE_3_5_HAIKU_20241022_V1_0",
+	"auto":              "auto",
+	"claude-opus-4.6":   "claude-opus-4.6",
+	"claude-opus-4-6":   "claude-opus-4.6",
+	"claude-opus-4.5":   "claude-opus-4.5",
+	"claude-opus-4-5":   "claude-opus-4.5",
+	"claude-sonnet-4.6": "claude-sonnet-4.6",
+	"claude-sonnet-4-6": "claude-sonnet-4.6",
+	"claude-sonnet-4.5": "claude-sonnet-4.5",
+	"claude-sonnet-4-5": "claude-sonnet-4.5",
+	"claude-sonnet-4":   "claude-sonnet-4",
+	"claude-haiku-4.5":  "claude-haiku-4.5",
+	"claude-haiku-4-5":  "claude-haiku-4.5",
+	"deepseek-3.2":      "deepseek-3.2",
+	"minimax-m2.1":      "minimax-m2.1",
+	"qwen3-coder-next":  "qwen3-coder-next",
 }
+
+type kiroCapabilityCacheEntry struct {
+	MaterialVersion int64
+	ExpiresAt       time.Time
+	Models          []*registry.ModelInfo
+}
+
+var kiroCapabilityCache sync.Map
 
 type KiroExecutor struct {
 	executor.BaseExecutor
@@ -52,6 +67,155 @@ func NewKiroExecutor(cfg *config.Config) *KiroExecutor {
 }
 
 func (e *KiroExecutor) Identifier() string { return constant.Kiro }
+
+func FetchKiroModels(ctx context.Context, auth *provider.Auth, cfg *config.Config) []*registry.ModelInfo {
+	if auth == nil || auth.ID == "" {
+		return nil
+	}
+	if cached, ok := loadCachedKiroModels(auth); ok {
+		return cached
+	}
+
+	exec := NewKiroExecutor(cfg)
+	baseModels := registry.GetKiroModels()
+	supported := make([]*registry.ModelInfo, 0, len(baseModels))
+	for _, model := range baseModels {
+		if model == nil || model.ID == "" {
+			continue
+		}
+		ok, reason := probeKiroModel(ctx, exec, auth, model.ID)
+		if ok {
+			supported = append(supported, model)
+			continue
+		}
+		log.Debugf("kiro capability probe rejected model %s for auth %s: %s", model.ID, auth.ID, reason)
+	}
+
+	storeCachedKiroModels(auth, supported)
+	return cloneKiroModels(supported)
+}
+
+func loadCachedKiroModels(auth *provider.Auth) ([]*registry.ModelInfo, bool) {
+	value, ok := kiroCapabilityCache.Load(auth.ID)
+	if !ok {
+		return nil, false
+	}
+	entry, ok := value.(kiroCapabilityCacheEntry)
+	if !ok {
+		return nil, false
+	}
+	if entry.MaterialVersion != auth.MaterialVersion {
+		return nil, false
+	}
+	if time.Now().After(entry.ExpiresAt) {
+		return nil, false
+	}
+	return cloneKiroModels(entry.Models), true
+}
+
+func storeCachedKiroModels(auth *provider.Auth, models []*registry.ModelInfo) {
+	kiroCapabilityCache.Store(auth.ID, kiroCapabilityCacheEntry{
+		MaterialVersion: auth.MaterialVersion,
+		ExpiresAt:       time.Now().Add(12 * time.Hour),
+		Models:          cloneKiroModels(models),
+	})
+}
+
+func cloneKiroModels(models []*registry.ModelInfo) []*registry.ModelInfo {
+	if len(models) == 0 {
+		return nil
+	}
+	clones := make([]*registry.ModelInfo, 0, len(models))
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		copy := *model
+		clones = append(clones, &copy)
+	}
+	return clones
+}
+
+type kiroProbeClassification int
+
+const (
+	kiroProbeUnsupported kiroProbeClassification = iota
+	kiroProbeSupported
+	kiroProbeRetryable
+)
+
+func classifyKiroProbe(statusCode int, body []byte) kiroProbeClassification {
+	msg := string(body)
+	switch {
+	case statusCode == http.StatusOK:
+		return kiroProbeSupported
+	case statusCode == http.StatusTooManyRequests && strings.Contains(msg, "INSUFFICIENT_MODEL_CAPACITY"):
+		return kiroProbeSupported
+	case statusCode == http.StatusBadRequest && strings.Contains(msg, "INVALID_MODEL_ID"):
+		return kiroProbeUnsupported
+	case statusCode >= 500:
+		return kiroProbeRetryable
+	default:
+		return kiroProbeRetryable
+	}
+}
+
+func probeKiroModel(ctx context.Context, exec *KiroExecutor, auth *provider.Auth, modelID string) (bool, string) {
+	attempt := func(timeout time.Duration) (kiroProbeClassification, string) {
+		probeCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		req := provider.Request{
+			Model: modelID,
+			Payload: []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"Write a Python function add(a, b) that returns their sum."}],"max_tokens":48}`,
+				modelID)),
+		}
+
+		rc, err := exec.prepareRequest(probeCtx, auth, req)
+		if err != nil {
+			return kiroProbeRetryable, err.Error()
+		}
+		httpReq, err := exec.buildHTTPRequest(rc)
+		if err != nil {
+			return kiroProbeRetryable, err.Error()
+		}
+
+		client := exec.NewHTTPClient(probeCtx, rc.auth, executor.KiroRequestTimeout)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return kiroProbeRetryable, err.Error()
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		classification := classifyKiroProbe(resp.StatusCode, body)
+		if classification == kiroProbeSupported {
+			return classification, ""
+		}
+		return classification, classifyKiroProbeFailure(resp.StatusCode, body)
+	}
+
+	classification, reason := attempt(20 * time.Second)
+	if classification == kiroProbeSupported || classification == kiroProbeUnsupported {
+		return classification == kiroProbeSupported, reason
+	}
+
+	classification, retryReason := attempt(30 * time.Second)
+	if classification == kiroProbeSupported {
+		return true, ""
+	}
+	if retryReason != "" {
+		return false, retryReason
+	}
+	return false, reason
+}
+
+func classifyKiroProbeFailure(statusCode int, body []byte) string {
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		return fmt.Sprintf("status_%d", statusCode)
+	}
+	return fmt.Sprintf("status_%d:%s", statusCode, msg)
+}
 
 func (e *KiroExecutor) PrepareRequest(_ *http.Request, _ *provider.Auth) error { return nil }
 
@@ -174,21 +338,47 @@ func (e *KiroExecutor) Execute(ctx context.Context, auth *provider.Auth, req pro
 		return provider.Response{}, fmt.Errorf("upstream error %d: %s", resp.StatusCode, string(body))
 	}
 
-	if hasEventStreamContentType(resp.Header.Get("Content-Type")) {
-		return e.handleEventStreamResponse(resp.Body, req.Model)
+	rawData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return provider.Response{}, err
 	}
-	return e.handleJSONResponse(resp.Body, req.Model)
+
+	if hasEventStreamContentType(resp.Header.Get("Content-Type")) || looksLikeAWSEventStream(rawData) {
+		return e.handleEventStreamBytes(rawData, req.Model)
+	}
+	return e.handleJSONBytes(rawData, req.Model)
 }
 
 func hasEventStreamContentType(contentType string) bool {
 	return len(contentType) >= 37 && contentType[:37] == "application/vnd.amazon.eventstream"
 }
 
+func looksLikeAWSEventStream(data []byte) bool {
+	if len(data) < 16 {
+		return false
+	}
+	_, frame, err := splitAWSEventStream(data, false)
+	if err != nil || frame == nil {
+		return false
+	}
+	_, err = parseEventPayload(frame)
+	return err == nil
+}
+
 func (e *KiroExecutor) handleEventStreamResponse(body io.ReadCloser, model string) (provider.Response, error) {
+	defer body.Close()
+	rawData, err := io.ReadAll(body)
+	if err != nil {
+		return provider.Response{}, err
+	}
+	return e.handleEventStreamBytes(rawData, model)
+}
+
+func (e *KiroExecutor) handleEventStreamBytes(rawData []byte, model string) (provider.Response, error) {
 	bufPtr := stream.ScannerBufferPool.Get().(*[]byte)
 	defer stream.ScannerBufferPool.Put(bufPtr)
 
-	scanner := bufio.NewScanner(body)
+	scanner := bufio.NewScanner(bytes.NewReader(rawData))
 	scanner.Buffer(*bufPtr, executor.DefaultStreamBufferSize)
 	scanner.Split(splitAWSEventStream)
 	state := to_ir.NewKiroStreamState()
@@ -217,7 +407,10 @@ func (e *KiroExecutor) handleJSONResponse(body io.ReadCloser, model string) (pro
 	if err != nil {
 		return provider.Response{}, err
 	}
+	return e.handleJSONBytes(rawData, model)
+}
 
+func (e *KiroExecutor) handleJSONBytes(rawData []byte, model string) (provider.Response, error) {
 	messages, usage, err := to_ir.ParseKiroResponse(rawData)
 	if err != nil {
 		return provider.Response{}, err

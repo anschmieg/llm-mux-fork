@@ -137,14 +137,19 @@ func (a *KiroAuthenticator) Login(ctx context.Context, cfg *config.Config, opts 
 				return nil, err
 			}
 			path = strings.Trim(strings.TrimSpace(path), "\"'")
-			rt, err := extractRefreshTokenFromFile(path)
+			fullCreds, err := readFullKiroCredentials(path)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read token from %s: %w", path, err)
 			}
-			if rt == "" {
+			if fullCreds == nil || fullCreds.RefreshToken == "" {
 				return nil, fmt.Errorf("no refresh token found in file %s", path)
 			}
-			refreshToken = rt
+			refreshToken = fullCreds.RefreshToken
+			allCandidates = append(allCandidates, tokenCandidate{
+				Path:         path,
+				ModTime:      time.Now(),
+				RefreshToken: fullCreds.RefreshToken,
+			})
 		default:
 			return nil, fmt.Errorf("invalid selection")
 		}
@@ -193,6 +198,15 @@ func (a *KiroAuthenticator) Login(ctx context.Context, cfg *config.Config, opts 
 				}
 				if fullCreds.Provider != "" {
 					creds.Provider = fullCreds.Provider
+				}
+				if fullCreds.ClientID != "" {
+					creds.ClientID = fullCreds.ClientID
+				}
+				if fullCreds.ClientSecret != "" {
+					creds.ClientSecret = fullCreds.ClientSecret
+				}
+				if fullCreds.IDCRegion != "" {
+					creds.IDCRegion = fullCreds.IDCRegion
 				}
 			}
 			break
@@ -365,6 +379,9 @@ func readFullKiroCredentials(path string) (*kiro.KiroCredentials, error) {
 	} else if am, ok := data["auth_method"].(string); ok {
 		creds.AuthMethod = am
 	}
+	if creds.AuthMethod == "builder-id" {
+		creds.AuthMethod = "iam"
+	}
 
 	if pa, ok := data["profileArn"].(string); ok {
 		creds.ProfileArn = pa
@@ -374,6 +391,21 @@ func readFullKiroCredentials(path string) (*kiro.KiroCredentials, error) {
 
 	if p, ok := data["provider"].(string); ok {
 		creds.Provider = p
+	}
+	if cid, ok := data["clientId"].(string); ok {
+		creds.ClientID = cid
+	} else if cid, ok := data["client_id"].(string); ok {
+		creds.ClientID = cid
+	}
+	if cs, ok := data["clientSecret"].(string); ok {
+		creds.ClientSecret = cs
+	} else if cs, ok := data["client_secret"].(string); ok {
+		creds.ClientSecret = cs
+	}
+	if r, ok := data["idcRegion"].(string); ok {
+		creds.IDCRegion = r
+	} else if r, ok := data["idc_region"].(string); ok {
+		creds.IDCRegion = r
 	}
 
 	return creds, nil

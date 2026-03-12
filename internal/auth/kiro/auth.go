@@ -5,7 +5,6 @@ import (
 	"github.com/nghyane/llm-mux/internal/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -41,6 +40,9 @@ func RefreshTokens(creds *KiroCredentials) (*KiroCredentials, error) {
 	if region == "" {
 		region = DefaultRegion
 	}
+	if creds.IDCRegion != "" {
+		region = creds.IDCRegion
+	}
 
 	// Determine auth method - default to social for tokens from Kiro IDE
 	authMethod := creds.AuthMethod
@@ -59,18 +61,20 @@ func RefreshTokens(creds *KiroCredentials) (*KiroCredentials, error) {
 		}
 		reqBody, _ = json.Marshal(payload)
 	} else {
-		// Use AWS OIDC endpoint for IAM/SSO auth
+		// Use AWS OIDC endpoint for IAM/SSO auth. Current Kiro CLI builder-id
+		// credentials expect a JSON payload, not form-encoded data.
 		tokenURL = fmt.Sprintf(OIDCRefreshURL, region)
-		data := url.Values{}
-		data.Set("grant_type", "refresh_token")
-		data.Set("refresh_token", creds.RefreshToken)
+		payload := map[string]string{
+			"refreshToken": creds.RefreshToken,
+			"grantType":    "refresh_token",
+		}
 		if creds.ClientID != "" {
-			data.Set("client_id", creds.ClientID)
+			payload["clientId"] = creds.ClientID
 		}
 		if creds.ClientSecret != "" {
-			data.Set("client_secret", creds.ClientSecret)
+			payload["clientSecret"] = creds.ClientSecret
 		}
-		reqBody = []byte(data.Encode())
+		reqBody, _ = json.Marshal(payload)
 	}
 
 	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(string(reqBody)))
@@ -81,7 +85,7 @@ func RefreshTokens(creds *KiroCredentials) (*KiroCredentials, error) {
 	if authMethod == "social" {
 		req.Header.Set("Content-Type", "application/json")
 	} else {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
 
@@ -116,17 +120,50 @@ func RefreshTokens(creds *KiroCredentials) (*KiroCredentials, error) {
 			newCreds.ProfileArn = kiroResp.ProfileArn
 		}
 	} else {
-		var tokenResp TokenResponse
+		var tokenResp map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 			return nil, fmt.Errorf("failed to decode token response: %w", err)
 		}
-		newCreds.AccessToken = tokenResp.AccessToken
-		if tokenResp.RefreshToken != "" {
-			newCreds.RefreshToken = tokenResp.RefreshToken
+
+		accessToken, _ := tokenResp["accessToken"].(string)
+		if accessToken == "" {
+			accessToken, _ = tokenResp["access_token"].(string)
 		}
-		newCreds.ExpiresIn = tokenResp.ExpiresIn
-		newCreds.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-		newCreds.TokenType = tokenResp.TokenType
+		refreshToken, _ := tokenResp["refreshToken"].(string)
+		if refreshToken == "" {
+			refreshToken, _ = tokenResp["refresh_token"].(string)
+		}
+		tokenType, _ := tokenResp["tokenType"].(string)
+		if tokenType == "" {
+			tokenType, _ = tokenResp["token_type"].(string)
+		}
+		expiresIn := 0
+		switch v := tokenResp["expiresIn"].(type) {
+		case float64:
+			expiresIn = int(v)
+		case int:
+			expiresIn = v
+		}
+		if expiresIn == 0 {
+			switch v := tokenResp["expires_in"].(type) {
+			case float64:
+				expiresIn = int(v)
+			case int:
+				expiresIn = v
+			}
+		}
+		if accessToken == "" {
+			return nil, fmt.Errorf("failed to decode token response: missing access token")
+		}
+		newCreds.AccessToken = accessToken
+		if refreshToken != "" {
+			newCreds.RefreshToken = refreshToken
+		}
+		newCreds.ExpiresIn = expiresIn
+		if expiresIn > 0 {
+			newCreds.ExpiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
+		}
+		newCreds.TokenType = tokenType
 	}
 
 	return &newCreds, nil

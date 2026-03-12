@@ -140,7 +140,9 @@ func registerModelsForAuth(a *provider.Auth, cfg *config.Config, wsGateway *wsre
 		models = registry.GetClineModels()
 		models = applyExcludedModels(models, excluded)
 	case "kiro":
-		models = registry.GetKiroModels()
+		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+		models = providers.FetchKiroModels(ctx, a, cfg)
+		cancel()
 		models = applyExcludedModels(models, excluded)
 	case "github-copilot":
 		models = registry.GetGitHubCopilotModels()
