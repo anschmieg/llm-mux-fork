@@ -170,8 +170,6 @@ func handlePassthrough(from, to string, response []byte) []byte {
 	switch {
 	case from == to:
 		return response
-	case (to == "codex" || to == "openai-response") && (from == "codex" || from == "openai-response"):
-		return response
 	case to == "claude" && from == "claude":
 		return response
 	}
