@@ -299,15 +299,6 @@ func (h *BaseAPIHandler) wrapStreamChannel(ctx context.Context, chunks <-chan pr
 }
 
 func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string, normalizedModel string, metadata map[string]any, err *interfaces.ErrorMessage) {
-	return h.getRequestDetailsWithSeen(modelName, make(map[string]struct{}))
-}
-
-func (h *BaseAPIHandler) getRequestDetailsWithSeen(modelName string, seen map[string]struct{}) (providers []string, normalizedModel string, metadata map[string]any, err *interfaces.ErrorMessage) {
-	if _, exists := seen[modelName]; exists {
-		return nil, "", nil, &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: fmt.Errorf("unknown provider for model %s", modelName)}
-	}
-	seen[modelName] = struct{}{}
-
 	resolvedModelName := util.ResolveAutoModel(modelName)
 	specifiedProvider := util.ExtractProviderFromPrefixedModelID(resolvedModelName)
 	cleanModelName := util.NormalizeIncomingModelID(resolvedModelName)
@@ -362,11 +353,6 @@ func (h *BaseAPIHandler) getRequestDetailsWithSeen(modelName string, seen map[st
 
 	if len(providers) == 0 {
 		if specifiedProvider == "" {
-			if h.Routing != nil {
-				if aliasTarget := h.Routing.ResolveModelAlias(modelName); aliasTarget != "" && aliasTarget != modelName {
-					return h.getRequestDetailsWithSeen(aliasTarget, seen)
-				}
-			}
 			if len(profileFallbackChain) > 0 {
 				resolvedProviders, resolvedModel, resolvedMetadata, resolved := h.resolveFallbackChain(profileFallbackChain)
 				if resolved {
