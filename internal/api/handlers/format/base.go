@@ -90,17 +90,6 @@ func (h *BaseAPIHandler) GetContextWithCancel(ctx context.Context, handler inter
 	}
 }
 
-// ResolveRoutableModel returns the normalized routable model for the given client-facing model name.
-// The boolean is false when no provider can currently serve the requested model after aliases,
-// profiles, and fallback chains are applied.
-func (h *BaseAPIHandler) ResolveRoutableModel(modelName string) (string, bool) {
-	_, normalizedModel, _, err := h.getRequestDetails(modelName)
-	if err != nil {
-		return "", false
-	}
-	return normalizedModel, true
-}
-
 // Context keys to avoid string allocation on each request
 type ctxKey int
 
