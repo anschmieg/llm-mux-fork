@@ -6,7 +6,6 @@ import (
 
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/registry"
-	"github.com/tidwall/gjson"
 )
 
 func TestGetRequestDetailsResolvesFallbackSeed(t *testing.T) {
@@ -156,94 +155,5 @@ func TestGetRequestDetailsResolvesProfileFallbackWhenPrimaryUnavailable(t *testi
 	chain := handler.effectiveFallbackChain(normalizedModel, metadata)
 	if !slices.Equal(chain, []string{fallbackModelID}) {
 		t.Fatalf("unexpected resolved chain metadata: got=%v", chain)
-	}
-}
-
-func TestGetRequestDetailsResolvesNestedFallbackSeed(t *testing.T) {
-	clientID := "test-nested-fallback-client"
-	modelRegistry := registry.GetGlobalRegistry()
-	modelRegistry.RegisterClient(clientID, "antigravity", []*registry.ModelInfo{
-		{
-			ID:          "antigravity/claude-opus-4-6-thinking",
-			Object:      "model",
-			OwnedBy:     "antigravity",
-			CanonicalID: "antigravity/claude-opus-4-6-thinking",
-		},
-	})
-	t.Cleanup(func() {
-		modelRegistry.RegisterClient(clientID, "antigravity", nil)
-	})
-
-	routing := &config.RoutingConfig{
-		Aliases: map[string]string{
-			"claude-opus-4.6": "claude-opus-4-6-thinking",
-		},
-		Fallbacks: map[string][]string{
-			"claude-opus-4-6-thinking": {"antigravity/claude-opus-4-6-thinking"},
-		},
-	}
-	routing.Init()
-
-	handler := &BaseAPIHandler{Routing: routing}
-	providers, normalizedModel, _, errMsg := handler.getRequestDetails("claude-opus-4.6")
-	if errMsg != nil {
-		t.Fatalf("expected nested fallback resolution to succeed, got error: %v", errMsg.Error)
-	}
-	if normalizedModel != "antigravity/claude-opus-4-6-thinking" {
-		t.Fatalf("unexpected normalized model: got=%q", normalizedModel)
-	}
-	if !slices.Contains(providers, "antigravity") {
-		t.Fatalf("expected antigravity provider in %v", providers)
-	}
-}
-
-func TestGetRequestDetailsRecursesThroughOriginalAliasKey(t *testing.T) {
-	clientID := "test-alias-recurse-client"
-	modelRegistry := registry.GetGlobalRegistry()
-	modelRegistry.RegisterClient(clientID, "antigravity", []*registry.ModelInfo{
-		{
-			ID:          "claude-opus-4-6-thinking",
-			Object:      "model",
-			OwnedBy:     "antigravity",
-			CanonicalID: "claude-opus-4-6-thinking",
-		},
-	})
-	t.Cleanup(func() {
-		modelRegistry.RegisterClient(clientID, "antigravity", nil)
-	})
-
-	routing := &config.RoutingConfig{
-		Aliases: map[string]string{
-			"claude-opus-4.6": "claude-opus-4-6-thinking",
-		},
-	}
-	routing.Init()
-
-	handler := &BaseAPIHandler{Routing: routing}
-	providers, normalizedModel, _, errMsg := handler.getRequestDetails("claude-opus-4.6")
-	if errMsg != nil {
-		t.Fatalf("expected alias recursion to succeed, got error: %v", errMsg.Error)
-	}
-	if normalizedModel != "claude-opus-4-6-thinking" {
-		t.Fatalf("unexpected normalized model: got=%q", normalizedModel)
-	}
-	if !slices.Contains(providers, "antigravity") {
-		t.Fatalf("expected antigravity provider in %v", providers)
-	}
-}
-
-func TestBuildRequestOptsSyncsPayloadModelToNormalizedAlias(t *testing.T) {
-	raw := []byte(`{"model":"raptor-mini","messages":[{"role":"user","content":"hi"}]}`)
-
-	req, opts := buildRequestOpts("oswe-vscode-prime", raw, nil, "openai", "", false)
-
-	if req.Model != "oswe-vscode-prime" {
-		t.Fatalf("unexpected request model: %q", req.Model)
-	}
-	if got := gjson.GetBytes(req.Payload, "model").String(); got != "oswe-vscode-prime" {
-		t.Fatalf("request payload model mismatch: got=%q", got)
-	}
-	if got := gjson.GetBytes(opts.OriginalRequest, "model").String(); got != "oswe-vscode-prime" {
-		t.Fatalf("original request model mismatch: got=%q", got)
 	}
 }

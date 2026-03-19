@@ -68,14 +68,6 @@ func (h *Handler) getConfig() *config.Config {
 	return h.cfg
 }
 
-func (h *Handler) getRoutingConfig() *config.RoutingConfig {
-	cfg := h.getConfig()
-	if cfg == nil {
-		return nil
-	}
-	return &cfg.Routing
-}
-
 func (h *Handler) getHTTPClient() *http.Client {
 	h.httpClientOnce.Do(func() {
 		h.httpClient = util.SetProxy(&h.cfg.SDKConfig, &http.Client{})

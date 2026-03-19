@@ -25,6 +25,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/runtime/executor"
 	"github.com/nghyane/llm-mux/internal/runtime/executor/stream"
 	"github.com/nghyane/llm-mux/internal/translator"
+	"github.com/nghyane/llm-mux/internal/translator/from_ir"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 )
@@ -343,9 +344,9 @@ func (e *KiroExecutor) Execute(ctx context.Context, auth *provider.Auth, req pro
 	}
 
 	if hasEventStreamContentType(resp.Header.Get("Content-Type")) || looksLikeAWSEventStream(rawData) {
-		return e.handleEventStreamBytes(rawData, req.Model, opts.SourceFormat)
+		return e.handleEventStreamBytes(rawData, req.Model)
 	}
-	return e.handleJSONBytes(rawData, req.Model, opts.SourceFormat)
+	return e.handleJSONBytes(rawData, req.Model)
 }
 
 func hasEventStreamContentType(contentType string) bool {
@@ -370,10 +371,10 @@ func (e *KiroExecutor) handleEventStreamResponse(body io.ReadCloser, model strin
 	if err != nil {
 		return provider.Response{}, err
 	}
-	return e.handleEventStreamBytes(rawData, model, provider.FromString("openai"))
+	return e.handleEventStreamBytes(rawData, model)
 }
 
-func (e *KiroExecutor) handleEventStreamBytes(rawData []byte, model string, target provider.Format) (provider.Response, error) {
+func (e *KiroExecutor) handleEventStreamBytes(rawData []byte, model string) (provider.Response, error) {
 	bufPtr := stream.ScannerBufferPool.Get().(*[]byte)
 	defer stream.ScannerBufferPool.Put(bufPtr)
 
@@ -393,16 +394,12 @@ func (e *KiroExecutor) handleEventStreamBytes(rawData []byte, model string, targ
 	if state.AccumulatedContent != "" {
 		msg.Content = append(msg.Content, ir.ContentPart{Type: ir.ContentTypeText, Text: state.AccumulatedContent})
 	}
-	translator := stream.NewResponseTranslator(e.Cfg, target.String(), model)
-	payload, err := translator.Translate([]ir.CandidateResult{{
-		Index:        0,
-		Messages:     []ir.Message{*msg},
-		FinishReason: state.DetermineFinishReason(),
-	}}, nil, nil)
+
+	converted, err := from_ir.ToOpenAIChatCompletion([]ir.Message{*msg}, nil, model, "chatcmpl-"+uuid.New().String())
 	if err != nil {
 		return provider.Response{}, err
 	}
-	return provider.Response{Payload: payload}, nil
+	return provider.Response{Payload: converted}, nil
 }
 
 func (e *KiroExecutor) handleJSONResponse(body io.ReadCloser, model string) (provider.Response, error) {
@@ -410,11 +407,16 @@ func (e *KiroExecutor) handleJSONResponse(body io.ReadCloser, model string) (pro
 	if err != nil {
 		return provider.Response{}, err
 	}
-	return e.handleJSONBytes(rawData, model, provider.FromString("openai"))
+	return e.handleJSONBytes(rawData, model)
 }
 
-func (e *KiroExecutor) handleJSONBytes(rawData []byte, model string, target provider.Format) (provider.Response, error) {
-	converted, err := stream.TranslateResponseNonStream(e.Cfg, provider.FromString("kiro"), target, rawData, model)
+func (e *KiroExecutor) handleJSONBytes(rawData []byte, model string) (provider.Response, error) {
+	messages, usage, err := to_ir.ParseKiroResponse(rawData)
+	if err != nil {
+		return provider.Response{}, err
+	}
+
+	converted, err := from_ir.ToOpenAIChatCompletion(messages, usage, model, "chatcmpl-"+uuid.New().String())
 	if err != nil {
 		return provider.Response{}, err
 	}
@@ -444,11 +446,11 @@ func (e *KiroExecutor) ExecuteStream(ctx context.Context, auth *provider.Auth, r
 	}
 
 	out := make(chan provider.StreamChunk, 4096) // Single user: maximize throughput
-	go e.processStream(ctx, resp, req.Model, opts.SourceFormat, out)
+	go e.processStream(ctx, resp, req.Model, out)
 	return out, nil
 }
 
-func (e *KiroExecutor) processStream(ctx context.Context, resp *http.Response, model string, target provider.Format, out chan<- provider.StreamChunk) {
+func (e *KiroExecutor) processStream(ctx context.Context, resp *http.Response, model string, out chan<- provider.StreamChunk) {
 	defer resp.Body.Close()
 	defer close(out)
 	defer func() {
@@ -465,8 +467,7 @@ func (e *KiroExecutor) processStream(ctx context.Context, resp *http.Response, m
 	scanner.Split(splitAWSEventStream)
 	state := to_ir.NewKiroStreamState()
 	messageID := "chatcmpl-" + uuid.New().String()
-	streamCtx := stream.NewStreamContext()
-	translator := stream.NewStreamTranslator(e.Cfg, provider.FromString("kiro"), target.String(), model, messageID, streamCtx)
+	idx := 0
 
 	for scanner.Scan() {
 		select {
@@ -480,41 +481,23 @@ func (e *KiroExecutor) processStream(ctx context.Context, resp *http.Response, m
 			continue
 		}
 		events, _ := state.ProcessChunk(payload)
-		unifiedEvents := make([]*ir.UnifiedEvent, 0, len(events))
-		for idx := range events {
-			event := events[idx]
-			unifiedEvents = append(unifiedEvents, &event)
-		}
-		result, err := translator.Translate(unifiedEvents)
-		if err != nil {
-			select {
-			case out <- provider.StreamChunk{Err: err}:
-			case <-ctx.Done():
-			}
-			return
-		}
-		for _, chunk := range result.Chunks {
-			select {
-			case out <- provider.StreamChunk{Payload: chunk}:
-			case <-ctx.Done():
-				return
+		for _, ev := range events {
+			if chunk, _ := from_ir.ToOpenAIChunk(ev, model, messageID, idx); len(chunk) > 0 {
+				select {
+				case out <- provider.StreamChunk{Payload: chunk}:
+					idx++
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}
 
-	chunks, err := translator.Flush()
-	if err != nil {
-		select {
-		case out <- provider.StreamChunk{Err: err}:
-		case <-ctx.Done():
-		}
-		return
-	}
-	for _, chunk := range chunks {
+	finish := ir.UnifiedEvent{Type: ir.EventTypeFinish, FinishReason: state.DetermineFinishReason()}
+	if chunk, _ := from_ir.ToOpenAIChunk(finish, model, messageID, idx); len(chunk) > 0 {
 		select {
 		case out <- provider.StreamChunk{Payload: chunk}:
 		case <-ctx.Done():
-			return
 		}
 	}
 }

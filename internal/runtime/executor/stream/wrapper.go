@@ -10,8 +10,6 @@ import (
 	"github.com/nghyane/llm-mux/internal/translator/from_ir"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/preprocess"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func ExtractUsageFromEvents(events []*ir.UnifiedEvent) *ir.Usage {
@@ -181,17 +179,7 @@ func TranslateToCodex(cfg *config.Config, from provider.Format, model string, pa
 		irReq.Store = &storeVal
 	}
 
-	body, err := from_ir.ToOpenAIRequestFmt(irReq, from_ir.FormatResponsesAPI)
-	if err != nil {
-		return nil, err
-	}
-	if gjson.GetBytes(body, "max_output_tokens").Exists() {
-		body, _ = sjson.DeleteBytes(body, "max_output_tokens")
-	}
-	if gjson.GetBytes(body, "max_completion_tokens").Exists() {
-		body, _ = sjson.DeleteBytes(body, "max_completion_tokens")
-	}
-	return body, nil
+	return from_ir.ToOpenAIRequestFmt(irReq, from_ir.FormatResponsesAPI)
 }
 
 func TranslateToClaude(cfg *config.Config, from provider.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
@@ -205,12 +193,7 @@ func TranslateToClaude(cfg *config.Config, from provider.Format, model string, p
 func TranslateToOpenAI(cfg *config.Config, from provider.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
 	fromStr := from.String()
 	if fromStr == "openai" || fromStr == "cline" {
-		out := sseutil.ApplyPayloadConfig(cfg, model, payload)
-		if streaming {
-			out, _ = sjson.SetBytes(out, "stream", true)
-			out, _ = sjson.SetBytes(out, "stream_options.include_usage", true)
-		}
-		return out, nil
+		return sseutil.ApplyPayloadConfig(cfg, model, payload), nil
 	}
 
 	irReq, err := ConvertRequestToIR(from, model, payload, metadata)
@@ -221,12 +204,7 @@ func TranslateToOpenAI(cfg *config.Config, from provider.Format, model string, p
 	if err != nil {
 		return nil, err
 	}
-	openaiJSON = sseutil.ApplyPayloadConfig(cfg, model, openaiJSON)
-	if streaming {
-		openaiJSON, _ = sjson.SetBytes(openaiJSON, "stream", true)
-		openaiJSON, _ = sjson.SetBytes(openaiJSON, "stream_options.include_usage", true)
-	}
-	return openaiJSON, nil
+	return sseutil.ApplyPayloadConfig(cfg, model, openaiJSON), nil
 }
 
 func TranslateToGemini(cfg *config.Config, from provider.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {

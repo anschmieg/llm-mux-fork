@@ -123,15 +123,7 @@ func (h *OpenAIAPIHandler) canonicalizeModelList(models []map[string]any) []map[
 			continue
 		}
 
-		resolvedModel, ok := h.ResolveRoutableModel(canonicalID)
-		if !ok {
-			continue
-		}
-
-		backingModel := h.resolveBackingModelForAlias(resolvedModel, modelByID)
-		if backingModel == nil {
-			backingModel = h.resolveBackingModelForAlias(canonicalID, modelByID)
-		}
+		backingModel := h.resolveBackingModelForAlias(canonicalID, modelByID)
 		if backingModel == nil {
 			continue
 		}

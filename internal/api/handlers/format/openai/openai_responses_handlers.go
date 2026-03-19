@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 
@@ -144,13 +145,17 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 			return
 		case chunk, ok := <-data:
 			if !ok {
+				sw.Write([]byte("\n"))
+				flusher.Flush()
 				cancel(nil)
 				return
 			}
-			if len(chunk) == 0 {
-				continue
+
+			if bytes.HasPrefix(chunk, []byte("event:")) {
+				sw.Write([]byte("\n"))
 			}
 			sw.Write(chunk)
+			sw.Write([]byte("\n"))
 
 			if !sw.Ok() {
 				cancel(sw.Err())

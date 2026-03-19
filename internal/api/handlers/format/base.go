@@ -12,10 +12,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/interfaces"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
-	"github.com/nghyane/llm-mux/internal/routingpolicy"
 	"github.com/nghyane/llm-mux/internal/util"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 type ErrorResponse struct {
@@ -90,17 +87,6 @@ func (h *BaseAPIHandler) GetContextWithCancel(ctx context.Context, handler inter
 	}
 }
 
-// ResolveRoutableModel returns the normalized routable model for the given client-facing model name.
-// The boolean is false when no provider can currently serve the requested model after aliases,
-// profiles, and fallback chains are applied.
-func (h *BaseAPIHandler) ResolveRoutableModel(modelName string) (string, bool) {
-	_, normalizedModel, _, err := h.getRequestDetails(modelName)
-	if err != nil {
-		return "", false
-	}
-	return normalizedModel, true
-}
-
 // Context keys to avoid string allocation on each request
 type ctxKey int
 
@@ -110,8 +96,6 @@ const (
 )
 
 const routingFallbackChainMetadataKey = "routing_fallback_chain"
-const routingDowngradeReasonMetadataKey = "routing_downgrade_reason"
-
 func appendAPIResponse(c *gin.Context, data []byte) {
 	if c == nil || len(data) == 0 {
 		return
@@ -134,7 +118,6 @@ func appendAPIResponse(c *gin.Context, data []byte) {
 // buildRequestOpts creates request and options, cloning payload/metadata only once (shared reference)
 func buildRequestOpts(normalizedModel string, rawJSON []byte, metadata map[string]any, handlerType string, alt string, stream bool) (provider.Request, provider.Options) {
 	payload := cloneBytes(rawJSON)
-	payload = syncPayloadModel(payload, normalizedModel)
 	meta := cloneMetadata(metadata)
 
 	sourceFormat := provider.Format(handlerType)
@@ -152,23 +135,6 @@ func buildRequestOpts(normalizedModel string, rawJSON []byte, metadata map[strin
 		Metadata:        meta, // Same map, no second clone
 	}
 	return req, opts
-}
-
-func syncPayloadModel(payload []byte, normalizedModel string) []byte {
-	if len(payload) == 0 || strings.TrimSpace(normalizedModel) == "" {
-		return payload
-	}
-	if !gjson.ValidBytes(payload) {
-		return payload
-	}
-	if !gjson.GetBytes(payload, "model").Exists() {
-		return payload
-	}
-	updated, err := sjson.SetBytes(payload, "model", normalizedModel)
-	if err != nil {
-		return payload
-	}
-	return updated
 }
 
 // extractErrorDetails extracts status code and headers from error interface
@@ -310,15 +276,6 @@ func (h *BaseAPIHandler) wrapStreamChannel(ctx context.Context, chunks <-chan pr
 }
 
 func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string, normalizedModel string, metadata map[string]any, err *interfaces.ErrorMessage) {
-	return h.getRequestDetailsWithSeen(modelName, make(map[string]struct{}))
-}
-
-func (h *BaseAPIHandler) getRequestDetailsWithSeen(modelName string, seen map[string]struct{}) (providers []string, normalizedModel string, metadata map[string]any, err *interfaces.ErrorMessage) {
-	if _, exists := seen[modelName]; exists {
-		return nil, "", nil, &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: fmt.Errorf("unknown provider for model %s", modelName)}
-	}
-	seen[modelName] = struct{}{}
-
 	resolvedModelName := util.ResolveAutoModel(modelName)
 	specifiedProvider := util.ExtractProviderFromPrefixedModelID(resolvedModelName)
 	cleanModelName := util.NormalizeIncomingModelID(resolvedModelName)
@@ -331,22 +288,6 @@ func (h *BaseAPIHandler) getRequestDetailsWithSeen(modelName string, seen map[st
 			profileFallbackChain = h.Routing.GetProfileFallbackChain(requestedProfileID)
 		}
 		cleanModelName = h.Routing.ResolveModelAlias(cleanModelName)
-		if specifiedProvider == "" {
-			if downgradeModel, downgradeReason, downgraded := routingpolicy.Global().ShouldDowngrade(cleanModelName, h.Routing); downgraded {
-				downgradeTarget := util.NormalizeIncomingModelID(downgradeModel)
-				if profilePrimary, ok := h.Routing.ResolveProfilePrimary(downgradeTarget); ok {
-					profileFallbackChain = h.Routing.GetProfileFallbackChain(downgradeTarget)
-					downgradeTarget = util.NormalizeIncomingModelID(profilePrimary)
-				} else {
-					profileFallbackChain = nil
-				}
-				cleanModelName = h.Routing.ResolveModelAlias(downgradeTarget)
-				if metadata == nil {
-					metadata = make(map[string]any, 1)
-				}
-				metadata[routingDowngradeReasonMetadataKey] = downgradeReason
-			}
-		}
 	}
 
 	if len(profileFallbackChain) > 0 {
@@ -373,11 +314,6 @@ func (h *BaseAPIHandler) getRequestDetailsWithSeen(modelName string, seen map[st
 
 	if len(providers) == 0 {
 		if specifiedProvider == "" {
-			if h.Routing != nil {
-				if aliasTarget := h.Routing.ResolveModelAlias(modelName); aliasTarget != "" && aliasTarget != modelName {
-					return h.getRequestDetailsWithSeen(aliasTarget, seen)
-				}
-			}
 			if len(profileFallbackChain) > 0 {
 				resolvedProviders, resolvedModel, resolvedMetadata, resolved := h.resolveFallbackChain(profileFallbackChain)
 				if resolved {
@@ -395,27 +331,14 @@ func (h *BaseAPIHandler) getRequestDetailsWithSeen(modelName string, seen map[st
 }
 
 func (h *BaseAPIHandler) resolveFallbackSeed(seedModel string) ([]string, string, map[string]any, bool) {
-	return h.resolveFallbackSeedWithSeen(seedModel, make(map[string]struct{}))
-}
-
-func (h *BaseAPIHandler) resolveFallbackSeedWithSeen(seedModel string, seen map[string]struct{}) ([]string, string, map[string]any, bool) {
-	if _, exists := seen[seedModel]; exists {
-		return nil, "", nil, false
-	}
-	seen[seedModel] = struct{}{}
-
 	fallbacks := h.getFallbackChain(seedModel)
 	if len(fallbacks) == 0 {
 		return nil, "", nil, false
 	}
-	return h.resolveFallbackChainWithSeen(fallbacks, seen)
+	return h.resolveFallbackChain(fallbacks)
 }
 
 func (h *BaseAPIHandler) resolveFallbackChain(fallbacks []string) ([]string, string, map[string]any, bool) {
-	return h.resolveFallbackChainWithSeen(fallbacks, make(map[string]struct{}))
-}
-
-func (h *BaseAPIHandler) resolveFallbackChainWithSeen(fallbacks []string, seen map[string]struct{}) ([]string, string, map[string]any, bool) {
 	if len(fallbacks) == 0 {
 		return nil, "", nil, false
 	}
@@ -428,10 +351,6 @@ func (h *BaseAPIHandler) resolveFallbackChainWithSeen(fallbacks []string, seen m
 
 		providers := util.GetProviderName(normalizedFallback)
 		if len(providers) == 0 {
-			resolvedProviders, resolvedModel, resolvedMetadata, resolved := h.resolveFallbackSeedWithSeen(normalizedFallback, seen)
-			if resolved {
-				return resolvedProviders, resolvedModel, resolvedMetadata, true
-			}
 			continue
 		}
 
