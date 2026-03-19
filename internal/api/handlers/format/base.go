@@ -12,7 +12,6 @@ import (
 	"github.com/nghyane/llm-mux/internal/interfaces"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
-	"github.com/nghyane/llm-mux/internal/routingpolicy"
 	"github.com/nghyane/llm-mux/internal/util"
 )
 
@@ -97,8 +96,6 @@ const (
 )
 
 const routingFallbackChainMetadataKey = "routing_fallback_chain"
-const routingDowngradeReasonMetadataKey = "routing_downgrade_reason"
-
 func appendAPIResponse(c *gin.Context, data []byte) {
 	if c == nil || len(data) == 0 {
 		return
@@ -291,22 +288,6 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 			profileFallbackChain = h.Routing.GetProfileFallbackChain(requestedProfileID)
 		}
 		cleanModelName = h.Routing.ResolveModelAlias(cleanModelName)
-		if specifiedProvider == "" {
-			if downgradeModel, downgradeReason, downgraded := routingpolicy.Global().ShouldDowngrade(cleanModelName, h.Routing); downgraded {
-				downgradeTarget := util.NormalizeIncomingModelID(downgradeModel)
-				if profilePrimary, ok := h.Routing.ResolveProfilePrimary(downgradeTarget); ok {
-					profileFallbackChain = h.Routing.GetProfileFallbackChain(downgradeTarget)
-					downgradeTarget = util.NormalizeIncomingModelID(profilePrimary)
-				} else {
-					profileFallbackChain = nil
-				}
-				cleanModelName = h.Routing.ResolveModelAlias(downgradeTarget)
-				if metadata == nil {
-					metadata = make(map[string]any, 1)
-				}
-				metadata[routingDowngradeReasonMetadataKey] = downgradeReason
-			}
-		}
 	}
 
 	if len(profileFallbackChain) > 0 {
