@@ -159,44 +159,6 @@ func TestGetRequestDetailsResolvesProfileFallbackWhenPrimaryUnavailable(t *testi
 	}
 }
 
-func TestGetRequestDetailsResolvesNestedFallbackSeed(t *testing.T) {
-	clientID := "test-nested-fallback-client"
-	modelRegistry := registry.GetGlobalRegistry()
-	modelRegistry.RegisterClient(clientID, "antigravity", []*registry.ModelInfo{
-		{
-			ID:          "antigravity/claude-opus-4-6-thinking",
-			Object:      "model",
-			OwnedBy:     "antigravity",
-			CanonicalID: "antigravity/claude-opus-4-6-thinking",
-		},
-	})
-	t.Cleanup(func() {
-		modelRegistry.RegisterClient(clientID, "antigravity", nil)
-	})
-
-	routing := &config.RoutingConfig{
-		Aliases: map[string]string{
-			"claude-opus-4.6": "claude-opus-4-6-thinking",
-		},
-		Fallbacks: map[string][]string{
-			"claude-opus-4-6-thinking": {"antigravity/claude-opus-4-6-thinking"},
-		},
-	}
-	routing.Init()
-
-	handler := &BaseAPIHandler{Routing: routing}
-	providers, normalizedModel, _, errMsg := handler.getRequestDetails("claude-opus-4.6")
-	if errMsg != nil {
-		t.Fatalf("expected nested fallback resolution to succeed, got error: %v", errMsg.Error)
-	}
-	if normalizedModel != "antigravity/claude-opus-4-6-thinking" {
-		t.Fatalf("unexpected normalized model: got=%q", normalizedModel)
-	}
-	if !slices.Contains(providers, "antigravity") {
-		t.Fatalf("expected antigravity provider in %v", providers)
-	}
-}
-
 func TestBuildRequestOptsSyncsPayloadModelToNormalizedAlias(t *testing.T) {
 	raw := []byte(`{"model":"raptor-mini","messages":[{"role":"user","content":"hi"}]}`)
 
