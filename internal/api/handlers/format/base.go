@@ -14,8 +14,6 @@ import (
 	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/routingpolicy"
 	"github.com/nghyane/llm-mux/internal/util"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 type ErrorResponse struct {
@@ -123,7 +121,6 @@ func appendAPIResponse(c *gin.Context, data []byte) {
 // buildRequestOpts creates request and options, cloning payload/metadata only once (shared reference)
 func buildRequestOpts(normalizedModel string, rawJSON []byte, metadata map[string]any, handlerType string, alt string, stream bool) (provider.Request, provider.Options) {
 	payload := cloneBytes(rawJSON)
-	payload = syncPayloadModel(payload, normalizedModel)
 	meta := cloneMetadata(metadata)
 
 	sourceFormat := provider.Format(handlerType)
@@ -141,23 +138,6 @@ func buildRequestOpts(normalizedModel string, rawJSON []byte, metadata map[strin
 		Metadata:        meta, // Same map, no second clone
 	}
 	return req, opts
-}
-
-func syncPayloadModel(payload []byte, normalizedModel string) []byte {
-	if len(payload) == 0 || strings.TrimSpace(normalizedModel) == "" {
-		return payload
-	}
-	if !gjson.ValidBytes(payload) {
-		return payload
-	}
-	if !gjson.GetBytes(payload, "model").Exists() {
-		return payload
-	}
-	updated, err := sjson.SetBytes(payload, "model", normalizedModel)
-	if err != nil {
-		return payload
-	}
-	return updated
 }
 
 // extractErrorDetails extracts status code and headers from error interface

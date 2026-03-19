@@ -6,7 +6,6 @@ import (
 
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/registry"
-	"github.com/tidwall/gjson"
 )
 
 func TestGetRequestDetailsResolvesFallbackSeed(t *testing.T) {
@@ -156,21 +155,5 @@ func TestGetRequestDetailsResolvesProfileFallbackWhenPrimaryUnavailable(t *testi
 	chain := handler.effectiveFallbackChain(normalizedModel, metadata)
 	if !slices.Equal(chain, []string{fallbackModelID}) {
 		t.Fatalf("unexpected resolved chain metadata: got=%v", chain)
-	}
-}
-
-func TestBuildRequestOptsSyncsPayloadModelToNormalizedAlias(t *testing.T) {
-	raw := []byte(`{"model":"raptor-mini","messages":[{"role":"user","content":"hi"}]}`)
-
-	req, opts := buildRequestOpts("oswe-vscode-prime", raw, nil, "openai", "", false)
-
-	if req.Model != "oswe-vscode-prime" {
-		t.Fatalf("unexpected request model: %q", req.Model)
-	}
-	if got := gjson.GetBytes(req.Payload, "model").String(); got != "oswe-vscode-prime" {
-		t.Fatalf("request payload model mismatch: got=%q", got)
-	}
-	if got := gjson.GetBytes(opts.OriginalRequest, "model").String(); got != "oswe-vscode-prime" {
-		t.Fatalf("original request model mismatch: got=%q", got)
 	}
 }
