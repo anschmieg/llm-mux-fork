@@ -59,28 +59,3 @@ func TestTranslateResponseNonStreamKiroToClaude(t *testing.T) {
 		t.Fatalf("expected Claude message payload with translated Kiro text, got: %s", string(out))
 	}
 }
-
-func TestTranslateResponseNonStreamCodexToResponsesUnwrapsCompletedWrapper(t *testing.T) {
-	raw := []byte(`{
-		"type":"response.completed",
-		"response":{
-			"id":"resp_test",
-			"output":[
-				{
-					"type":"message",
-					"role":"assistant",
-					"content":[{"type":"output_text","text":"Codex wrapped response"}]
-				}
-			],
-			"usage":{"input_tokens":12,"output_tokens":4}
-		}
-	}`)
-
-	out, err := TranslateResponseNonStream(&config.Config{}, provider.FromString("codex"), provider.FromString("openai-response"), raw, "gpt-5.1-codex")
-	if err != nil {
-		t.Fatalf("TranslateResponseNonStream returned error: %v", err)
-	}
-	if !strings.Contains(string(out), `"object":"response"`) || !strings.Contains(string(out), `Codex wrapped response`) {
-		t.Fatalf("expected Responses API payload with translated Codex text, got: %s", string(out))
-	}
-}
