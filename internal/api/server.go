@@ -27,7 +27,6 @@ import (
 	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
-	"github.com/nghyane/llm-mux/internal/routingpolicy"
 	"github.com/nghyane/llm-mux/internal/usage"
 	"github.com/nghyane/llm-mux/internal/util"
 	"gopkg.in/yaml.v3"
@@ -216,7 +215,6 @@ func NewServer(cfg *config.Config, authManager *provider.Manager, accessManager 
 
 	// Initialize provider prefix display setting in model registry
 	registry.GetGlobalRegistry().SetShowProviderPrefixes(cfg.ShowProviderPrefixes)
-	routingpolicy.Global().UpdateRouting(&cfg.Routing)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 	if optionState.localPassword != "" {
@@ -444,7 +442,6 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 			log.Debugf("show_provider_prefixes toggled to %t", cfg.ShowProviderPrefixes)
 		}
 	}
-	routingpolicy.Global().UpdateRouting(&cfg.Routing)
 
 	// Save YAML snapshot for next comparison
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)

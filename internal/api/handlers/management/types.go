@@ -8,7 +8,6 @@ type UsageStatsResponse struct {
 	ByProvider map[string]UsageProviderStats `json:"by_provider,omitempty"`
 	ByAccount  map[string]UsageAccountStats  `json:"by_account,omitempty"`
 	ByModel    map[string]UsageModelStats    `json:"by_model,omitempty"`
-	Routing    *UsageRoutingPolicyStats      `json:"routing_policy,omitempty"`
 	Timeline   *UsageTimeline                `json:"timeline,omitempty"`
 	Period     UsagePeriod                   `json:"period"`
 }
@@ -83,18 +82,6 @@ type UsagePeriod struct {
 	From          time.Time `json:"from"`
 	To            time.Time `json:"to"`
 	RetentionDays int       `json:"retention_days"`
-}
-
-// UsageRoutingPolicyStats exposes budget guard counters for dashboard views.
-type UsageRoutingPolicyStats struct {
-	DayUTC                    string  `json:"day_utc"`
-	EstimatedCostUSDToday     float64 `json:"estimated_cost_usd_today"`
-	MaxEstimatedCostUSDPerDay float64 `json:"max_estimated_cost_usd_per_day,omitempty"`
-	ExpensiveCallsToday       int64   `json:"expensive_calls_today"`
-	MaxExpensiveCallsPerDay   int64   `json:"max_expensive_calls_per_day,omitempty"`
-	DowngradedRequestsToday   int64   `json:"downgraded_requests_today"`
-	DowngradeModel            string  `json:"downgrade_model,omitempty"`
-	PolicyEnabled             bool    `json:"policy_enabled"`
 }
 
 // ConfigUpdateResponse represents the response after updating config.
